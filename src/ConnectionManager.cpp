@@ -17,12 +17,14 @@
 #include <cstring>
 #include <string>
 #include <errno.h> 
+#include <cstdio>
 
 
 #include <fstream>
 #include <sstream>
 #include "DataRefManager.h"
 #include <ConfigManager.h>
+#include "ConnectionStatusHUD.h"
 
 #if LIN || APL
 #define INVALID_SOCKET -1
@@ -38,6 +40,28 @@ int ConnectionManager::sitlPort = 4560;
 std::string ConnectionManager::status = "Disconnected";
 std::string ConnectionManager::lastMessage = "";
 
+std::string ConnectionManager::getSocketErrorString() {
+#if IBM
+    return std::to_string(WSAGetLastError());
+#else
+    return strerror(errno);
+#endif
+}
+
+bool ConnectionManager::configureAcceptedSocket(int clientSock) {
+    if (clientSock == INVALID_SOCKET) {
+        return false;
+    }
+
+#if APL
+    int noSigPipe = 1;
+    setsockopt(clientSock, SOL_SOCKET, SO_NOSIGPIPE,
+               reinterpret_cast<const char*>(&noSigPipe), sizeof(noSigPipe));
+#endif
+
+    return true;
+}
+
 #if IBM
 bool ConnectionManager::initializeWinSock() {
     WSADATA wsaData;
@@ -51,10 +75,10 @@ bool ConnectionManager::initializeWinSock() {
 
 
 void ConnectionManager::setupServerSocket() {
-    XPLMDebugString("px4xplane: Setting up server socket...\n");
+    XPLMDebugString("px4xplane: Sprig px4xplane setting up TCP listener...\n");
 
-    if (sockfd != -1 || connected) {
-        XPLMDebugString("px4xplane: Server socket already set up or connected, aborting new setup attempt.\n");
+    if (sockfd != -1) {
+        XPLMDebugString("px4xplane: TCP listener already active on port 4560.\n");
         return;
     }
 
@@ -131,7 +155,7 @@ void ConnectionManager::setupServerSocket() {
     status = "Waiting for PX4 SITL...";
     setLastMessage("Server socket ready on port 4560. Start PX4 SITL to connect.");
 
-    XPLMDebugString("px4xplane: Server socket ready on port 4560, waiting for PX4 SITL to connect...\n");
+    XPLMDebugString("px4xplane: TCP listening on port 4560; waiting for PX4 reconnect/client.\n");
     XPLMSpeakString("Waiting for PX4 connection");  // Audio feedback
 
     // NOTE: Don't call acceptConnection() here anymore - poll in flight loop instead
@@ -153,16 +177,16 @@ void ConnectionManager::setupServerSocket() {
  */
 void ConnectionManager::tryAcceptConnection() {
 
-    if (connected || sockfd == -1) {
-        return;  // Already connected or no socket
+    if (sockfd == -1) {
+        return;  // No listener
     }
 
     sockaddr_in cli_addr{};
     socklen_t clilen = sizeof(cli_addr);
 
-    newsockfd = accept(sockfd, (struct sockaddr*)&cli_addr, &clilen);
+    int acceptedSock = accept(sockfd, (struct sockaddr*)&cli_addr, &clilen);
 
-    if (newsockfd < 0) {
+    if (acceptedSock < 0) {
         // Check if it's "no connection yet" (not an error) or real error
 #if IBM
         int err = WSAGetLastError();
@@ -184,13 +208,41 @@ void ConnectionManager::tryAcceptConnection() {
         return;
     }
 
+    char clientAddr[64] = "unknown";
+#if LIN || APL
+    inet_ntop(AF_INET, &cli_addr.sin_addr, clientAddr, sizeof(clientAddr));
+#elif IBM
+    InetNtopA(AF_INET, &cli_addr.sin_addr, clientAddr, sizeof(clientAddr));
+#endif
+
+    if (!configureAcceptedSocket(acceptedSock)) {
+        XPLMDebugString("px4xplane: Failed to configure accepted PX4 client socket; closing it.\n");
+        closeSocket(acceptedSock);
+        return;
+    }
+
+    if (connected || newsockfd != INVALID_SOCKET) {
+        char staleBuf[256];
+        snprintf(staleBuf, sizeof(staleBuf),
+                 "px4xplane: Stale PX4 client closed; accepting newer client from %s:%d.\n",
+                 clientAddr, ntohs(cli_addr.sin_port));
+        XPLMDebugString(staleBuf);
+        handleClientDisconnect("Stale PX4 client closed for newer connection.", true);
+    }
+
+    newsockfd = acceptedSock;
+
     // Successfully connected!
-    XPLMDebugString("px4xplane: PX4 SITL connected successfully!\n");
+    char connectedBuf[256];
+    snprintf(connectedBuf, sizeof(connectedBuf),
+             "px4xplane: PX4 connected from %s:%d.\n",
+             clientAddr, ntohs(cli_addr.sin_port));
+    XPLMDebugString(connectedBuf);
     connected = true;
 
     // UX FIX (January 2025): Update status and notify user
-    status = "Connected";
-    setLastMessage("PX4 SITL connected successfully!");
+    status = "PX4 connected";
+    setLastMessage("PX4 connected; HIL messages active.");
     XPLMSpeakString("PX4 connected");  // Audio feedback
 
     // CRITICAL: Update menu to show "Disconnect from SITL"
@@ -277,7 +329,8 @@ std::map<int, int> ConnectionManager::loadMotorMappings(const std::string& filen
 
 
 void ConnectionManager::disconnect() {
-    if (!connected) return;
+    bool hadClient = connected || newsockfd != INVALID_SOCKET;
+    bool hadListener = sockfd != INVALID_SOCKET;
 
     // CRITICAL FIX (January 2025): Reset state BEFORE closing sockets
     // Order matters:
@@ -286,9 +339,11 @@ void ConnectionManager::disconnect() {
     //   3. Disable override flags
     //   4. Close sockets
 
-    DataRefManager::resetActuatorValues();  // Zero all throttle/control surface datarefs
-    MAVLinkManager::reset();                 // Clear actuator command history
-    DataRefManager::disableOverride();       // Disable override flags
+    if (hadClient) {
+        DataRefManager::resetActuatorValues();  // Zero all throttle/control surface datarefs
+        MAVLinkManager::reset();                 // Clear actuator command history
+        DataRefManager::disableOverride();       // Disable override flags
+    }
 
     closeSocket(sockfd);
     sockfd = -1;
@@ -297,14 +352,50 @@ void ConnectionManager::disconnect() {
 
     connected = false;
     status = "Disconnected";
-    setLastMessage("Disconnected from PX4 SITL.");
-    XPLMDebugString("px4xplane: Disconnected from SITL\n");
-    XPLMDebugString("px4xplane: Socket closed\n");
+    setLastMessage("Disconnected from PX4; TCP listener closed.");
+    if (hadClient || hadListener) {
+        XPLMDebugString("px4xplane: PX4 disconnected; TCP listener and client sockets closed.\n");
+    }
 
     // UX FIX (January 2025): Update menu and notify user
-    XPLMSpeakString("Disconnected");  // Audio feedback
+    if (hadClient || hadListener) {
+        XPLMSpeakString("Disconnected");  // Audio feedback
+    }
     extern void updateMenuItems();  // Defined in px4xplane.cpp
     updateMenuItems();  // Change menu back to "Connect to SITL"
+}
+
+void ConnectionManager::closeClient(const std::string& reason) {
+    handleClientDisconnect(reason, true);
+}
+
+void ConnectionManager::handleClientDisconnect(const std::string& reason, bool resetAircraftState) {
+    bool hadClient = connected || newsockfd != INVALID_SOCKET;
+
+    if (resetAircraftState && hadClient) {
+        DataRefManager::resetActuatorValues();
+        MAVLinkManager::reset();
+        DataRefManager::disableOverride();
+    }
+
+    closeSocket(newsockfd);
+    newsockfd = -1;
+    connected = false;
+
+    if (sockfd != INVALID_SOCKET) {
+        status = "Waiting for PX4 reconnect";
+        setLastMessage(reason + " Waiting for PX4 reconnect on TCP 4560.");
+        XPLMDebugString(("px4xplane: PX4 disconnected: " + reason + "\n").c_str());
+        XPLMDebugString("px4xplane: Waiting for PX4 reconnect on TCP 4560.\n");
+        ConnectionStatusHUD::updateStatus(ConnectionStatusHUD::Status::CONN_ERROR, reason);
+    } else {
+        status = "Disconnected";
+        setLastMessage(reason);
+        XPLMDebugString(("px4xplane: PX4 disconnected: " + reason + "\n").c_str());
+    }
+
+    extern void updateMenuItems();  // Defined in px4xplane.cpp
+    updateMenuItems();
 }
 
 void ConnectionManager::closeSocket(int& sockfd) {
@@ -332,7 +423,11 @@ void ConnectionManager::sendData(const uint8_t* buffer, int len) {
 
     int totalBytesSent = 0;
     while (totalBytesSent < len) {
-        int bytesSent = send(newsockfd, reinterpret_cast<const char*>(buffer) + totalBytesSent, len - totalBytesSent, 0);
+        int sendFlags = 0;
+#if LIN
+        sendFlags = MSG_NOSIGNAL;
+#endif
+        int bytesSent = send(newsockfd, reinterpret_cast<const char*>(buffer) + totalBytesSent, len - totalBytesSent, sendFlags);
 
         if (bytesSent < 0) {
             char buf[256];
@@ -342,14 +437,12 @@ void ConnectionManager::sendData(const uint8_t* buffer, int len) {
             snprintf(buf, sizeof(buf), "px4xplane: Error sending data: %s\n", strerror(errno));
 #endif
             XPLMDebugString(buf);
-            // Optionally, handle error, e.g., clean up and/or reconnect
+            handleClientDisconnect("send failed: " + getSocketErrorString(), true);
             return;
         }
         else if (bytesSent == 0) {
             // The peer has closed the connection.
-            XPLMDebugString("px4xplane: Peer has closed the connection\n");
-
-            // Clean up and/or try to reconnect.
+            handleClientDisconnect("send returned zero bytes; PX4 client closed.", true);
             return;
         }
 
@@ -375,15 +468,13 @@ void ConnectionManager::receiveData() {
     // Use select to check if there is data available to read
     int result = select(newsockfd + 1, &readSet, NULL, NULL, &timeout);
     if (result < 0) {
-        XPLMDebugString("px4xplane: Error in select\n");
+        handleClientDisconnect("select failed while reading PX4: " + getSocketErrorString(), true);
     }
     else if (result > 0 && FD_ISSET(newsockfd, &readSet)) {
         // There is data available to read
         int bytesReceived = recv(newsockfd, reinterpret_cast<char*>(buffer), sizeof(buffer) - 1, 0);
         if (bytesReceived < 0) {
-            XPLMDebugString("px4xplane: Error receiving data\n");
-            setLastMessage("Error receiving from PX4!"); // Store the received message
-
+            handleClientDisconnect("receive failed: " + getSocketErrorString(), true);
         }
         else if (bytesReceived > 0) {
             buffer[bytesReceived] = '\0'; // Null-terminate the received data
@@ -393,6 +484,9 @@ void ConnectionManager::receiveData() {
 
             // Call MAVLinkManager::receiveHILActuatorControls() function here
             MAVLinkManager::receiveHILActuatorControls(buffer, bytesReceived);
+        }
+        else {
+            handleClientDisconnect("PX4 client closed the TCP connection.", true);
         }
     }
 }

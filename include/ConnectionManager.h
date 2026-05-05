@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include <string>
 #include <map>
 
@@ -9,6 +10,7 @@ public:
     static bool isWaitingForConnection();  // NEW: Check if socket ready but not connected
     static void disconnect();
     static void closeSocket(int& sock);
+    static void closeClient(const std::string& reason);
     static void sendData(const uint8_t* buffer, int len);
     static void receiveData();
     static bool isConnected();
@@ -26,5 +28,8 @@ private:
     static std::string status;
     static int sitlPort;
     static std::string lastMessage; // Variable to keep the last message
+    static void handleClientDisconnect(const std::string& reason, bool resetAircraftState = true);
+    static bool configureAcceptedSocket(int clientSock);
+    static std::string getSocketErrorString();
 
 };

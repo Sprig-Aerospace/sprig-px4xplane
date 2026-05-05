@@ -15,6 +15,8 @@
 #ifndef VERSION_INFO_H
 #define VERSION_INFO_H
 
+#include <cstdio>
+
 namespace PX4XPlaneVersion {
 
     // =================================================================
@@ -22,29 +24,32 @@ namespace PX4XPlaneVersion {
     // =================================================================
 
     /** Plugin version string - displayed in UI and About dialog */
-    constexpr const char* VERSION = "3.4.2";
+    constexpr const char* VERSION = "3.4.2-sprig.1";
 
     /** Version phase description */
-    constexpr const char* PHASE = "Stable";
+    constexpr const char* PHASE = "Sprig HITL";
 
     /** Copyright year - update annually */
-    constexpr const char* YEAR = "2025";
+    constexpr const char* YEAR = "2026";
 
     /** Plugin build number - increment for each build */
-    constexpr const char* BUILD = "009";
+    constexpr const char* BUILD = "sprig-001";
 
     // =================================================================
     // AUTHOR AND PROJECT INFORMATION  
     // =================================================================
 
     /** Plugin author */
-    constexpr const char* AUTHOR = "Alireza Ghaderi";
+    constexpr const char* AUTHOR = "Sprig, based on px4xplane by Alireza Ghaderi";
 
     /** Project license */
     constexpr const char* LICENSE = "MIT License";
 
     /** GitHub repository URL */
     constexpr const char* REPOSITORY_URL = "https://github.com/alireza787b/px4xplane";
+
+    /** Sprig fork description */
+    constexpr const char* SPRIG_DESCRIPTION = "Sprig-maintained HITL build with hardened TCP reconnect handling";
 
     /** Project description */
     constexpr const char* DESCRIPTION = "Software-in-the-Loop interface for PX4 and X-Plane";
@@ -54,10 +59,10 @@ namespace PX4XPlaneVersion {
     // =================================================================
 
     /** Plugin signature for X-Plane */
-    constexpr const char* PLUGIN_SIGNATURE = "alireza787b.px4xplane";
+    constexpr const char* PLUGIN_SIGNATURE = "sprig.px4xplane";
 
     /** Plugin name shown in X-Plane */
-    constexpr const char* PLUGIN_NAME = "PX4 to X-Plane";
+    constexpr const char* PLUGIN_NAME = "Sprig PX4 X-Plane";
 
     // =================================================================
     // FORMATTED STRINGS - Auto-generated from above constants
@@ -112,8 +117,8 @@ namespace PX4XPlaneVersion {
     inline const char* getBuildInfo() {
         static char buildBuffer[512];
         snprintf(buildBuffer, sizeof(buildBuffer),
-            "PX4-XPlane v%s Build %s\n%s\n%s\nBuilt with X-Plane SDK XPLM300+\n%s",
-            VERSION, BUILD, getCopyrightString(), LICENSE, REPOSITORY_URL);
+            "Sprig PX4-XPlane v%s Build %s\n%s\nUpstream px4xplane by Alireza Ghaderi: %s\n%s\n%s\nBuilt with X-Plane SDK XPLM300+",
+            VERSION, BUILD, SPRIG_DESCRIPTION, REPOSITORY_URL, getCopyrightString(), LICENSE);
         return buildBuffer;
     }
 

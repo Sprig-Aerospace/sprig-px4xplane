@@ -14,7 +14,7 @@
 
 # Project name
 PROJECT := px4xplane
-VERSION := 2.5.2
+VERSION := 3.4.2-sprig.1
 
 # Compiler
 CXX := clang++
@@ -39,6 +39,7 @@ TARGET := $(OUTPUT_DIR)/mac.xpl
 #==============================================================================
 
 SOURCES := \
+	$(SRC_DIR)/AccelCalibration.cpp \
 	$(SRC_DIR)/ConfigManager.cpp \
 	$(SRC_DIR)/configReader.cpp \
 	$(SRC_DIR)/ConnectionManager.cpp \
@@ -47,6 +48,7 @@ SOURCES := \
 	$(SRC_DIR)/MAVLinkManager.cpp \
 	$(SRC_DIR)/px4xplane.cpp \
 	$(SRC_DIR)/TimeManager.cpp \
+	$(SRC_DIR)/TimestampProvider.cpp \
 	$(SRC_DIR)/UIConstants.cpp \
 	$(SRC_DIR)/UIHandler.cpp
 

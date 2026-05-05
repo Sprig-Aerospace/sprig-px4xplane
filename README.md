@@ -1,5 +1,9 @@
 # PX4-XPlane - PX4 X-Plane Integration Plugin
 
+## Sprig Maintained Fork
+
+This repository is maintained by Sprig for X-Plane 12 + PX4 HITL operations. Sprig keeps upstream attribution intact and adds operator-safe TCP reconnect handling, Sprig build metadata, safe default config values, a local TCP lifecycle harness, and a repeatable macOS packaging flow. See [SPRIG.md](SPRIG.md) for build, package, install, verification, harness, and reset instructions.
+
 [![Build Status](https://github.com/alireza787b/px4xplane/actions/workflows/build.yml/badge.svg)](https://github.com/alireza787b/px4xplane/actions/workflows/build.yml)
 [![Release](https://img.shields.io/github/v/release/alireza787b/px4xplane)](https://github.com/alireza787b/px4xplane/releases)
 [![License](https://img.shields.io/github/license/alireza787b/px4xplane)](LICENSE)

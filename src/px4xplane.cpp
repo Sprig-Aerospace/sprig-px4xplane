@@ -137,6 +137,8 @@ void drawFooter(int l, int b, float col_white[]) {
 
 
 PLUGIN_API void XPluginStop(void);
+PLUGIN_API int XPluginEnable(void);
+PLUGIN_API void XPluginDisable(void);
 
 
 PLUGIN_API int XPluginStart(
@@ -155,6 +157,7 @@ PLUGIN_API int XPluginStart(
 
 	debugLog("Plugin starting with enhanced UI system...");
 	debugLog(("Version: " + std::string(PX4XPlaneVersion::getFullVersionString())).c_str());
+	debugLog(("Build info: " + std::string(PX4XPlaneVersion::getBuildInfo())).c_str());
 
 	create_menu();
 
@@ -209,6 +212,10 @@ PLUGIN_API int XPluginStart(
 
 	// Initialize MAVLink message periods from config
 	initializeMessagePeriods();
+
+	// Sprig HITL default: start listening immediately so PX4 can connect on TCP 4560.
+	ConnectionManager::setupServerSocket();
+	updateMenuItems();
 
 	debugLog("Plugin started successfully");
 
@@ -332,8 +339,8 @@ void resetFlightLoopTimers();  // Forward declaration
 
 void toggleEnable() {
 	XPLMDebugString("px4xplane: toggleEnable() called.\n");
-	if (ConnectionManager::isConnected()) {
-		XPLMDebugString("px4xplane: Currently connected, attempting to disconnect.\n");
+	if (ConnectionManager::isConnected() || ConnectionManager::isWaitingForConnection()) {
+		XPLMDebugString("px4xplane: Active listener/client found, disconnecting cleanly.\n");
 
 		resetFlightLoopTimers();  // Reset timing state BEFORE disconnect
 		ConnectionManager::disconnect();
@@ -442,7 +449,7 @@ void updateMenuItems() {
 	// Recreate the remaining main menu items
 	XPLMAppendMenuItem(g_menu_id, "Show Data", (void*)0, 1);
 	XPLMAppendMenuSeparator(g_menu_id);
-	if (ConnectionManager::isConnected()) {
+	if (ConnectionManager::isConnected() || ConnectionManager::isWaitingForConnection()) {
 		XPLMAppendMenuItemWithCommand(g_menu_id, "Disconnect from SITL", toggleEnableCmd);
 	}
 	else {
@@ -522,6 +529,7 @@ float MyFlightLoopCallback(float inElapsedSinceLastCall, float inElapsedTimeSinc
 	// Poll for incoming PX4 connection if socket is waiting
 	static float waitStartTime = 0.0f;
 	static const float CONNECTION_TIMEOUT = 30.0f;  // 30 second timeout
+	static bool timeoutReported = false;
 
 	if (ConnectionManager::isWaitingForConnection()) {
 		// Get current simulation time for timeout tracking
@@ -533,31 +541,29 @@ float MyFlightLoopCallback(float inElapsedSinceLastCall, float inElapsedTimeSinc
 
 		float elapsed = currentSimTime - waitStartTime;
 
-		// Update HUD with current wait time
-		ConnectionStatusHUD::updateStatus(
-			ConnectionStatusHUD::Status::WAITING,
-			"Start PX4 SITL to connect",
-			elapsed
-		);
-
 		// Timeout after 30 seconds
 		if (elapsed > CONNECTION_TIMEOUT) {
-			XPLMDebugString("px4xplane: Connection timeout after 30s\n");
+			if (!timeoutReported) {
+				XPLMDebugString("px4xplane: PX4 connection wait exceeded 30s; listener remains active on TCP 4560.\n");
 
-			ConnectionManager::setLastMessage(
-				"Connection timeout. Is PX4 running? Click Connect to retry.");
-			XPLMSpeakString("Connection timeout");
+				ConnectionManager::setLastMessage(
+					"Connection wait exceeded 30s. Listener remains active on TCP 4560.");
+				XPLMSpeakString("Connection timeout");
+				timeoutReported = true;
+			}
 
 			// Update HUD to show timeout
 			ConnectionStatusHUD::updateStatus(
 				ConnectionStatusHUD::Status::TIMEOUT,
 				"Is PX4 SITL running?"
 			);
-
-			// Auto-disconnect to allow retry
-			ConnectionManager::disconnect();
-			waitStartTime = 0.0f;
-			return -1.0f;
+		} else {
+			// Update HUD with current wait time
+			ConnectionStatusHUD::updateStatus(
+				ConnectionStatusHUD::Status::WAITING,
+				"Start PX4 SITL to connect",
+				elapsed
+			);
 		}
 
 		// Try to accept connection (non-blocking)
@@ -574,8 +580,10 @@ float MyFlightLoopCallback(float inElapsedSinceLastCall, float inElapsedTimeSinc
 			"Ready to fly!"
 		);
 		waitStartTime = 0.0f;
+		timeoutReported = false;
 	} else {
 		waitStartTime = 0.0f;  // Reset when not waiting
+		timeoutReported = false;
 
 		// Hide HUD when not connecting
 		if (!ConnectionManager::isConnected()) {
@@ -585,6 +593,10 @@ float MyFlightLoopCallback(float inElapsedSinceLastCall, float inElapsedTimeSinc
 
 	// Ensure we're connected before proceeding with sensor data
 	if (!ConnectionManager::isConnected()) return -1.0f;
+
+	// Accept a newer PX4 client if one appears while the old client is still present.
+	// This prevents stale accepted sockets from owning the HIL lane across PX4 restarts.
+	ConnectionManager::tryAcceptConnection();
 
 	// Notify HUD that we're actively connected (for FPS monitoring)
 	ConnectionStatusHUD::notifyConnected();
@@ -683,9 +695,7 @@ float MyFlightLoopCallback(float inElapsedSinceLastCall, float inElapsedTimeSinc
 
 PLUGIN_API void XPluginStop(void) {
 	// Unregister the flight loop callback
-	if (ConnectionManager::isConnected()) {
-		toggleEnable();
-	}
+	ConnectionManager::disconnect();
 
 	XPLMUnregisterFlightLoopCallback(MyFlightLoopCallback, NULL);
 
@@ -699,4 +709,18 @@ PLUGIN_API void XPluginStop(void) {
 #endif
 	// ...
 	XPLMDebugString("px4xplane: Plugin stopped\n");
+}
+
+PLUGIN_API int XPluginEnable(void) {
+	XPLMDebugString("px4xplane: Plugin enabled\n");
+	ConnectionManager::setupServerSocket();
+	updateMenuItems();
+	return 1;
+}
+
+PLUGIN_API void XPluginDisable(void) {
+	XPLMDebugString("px4xplane: Plugin disabled; closing TCP sockets\n");
+	resetFlightLoopTimers();
+	ConnectionManager::disconnect();
+	ConnectionStatusHUD::updateStatus(ConnectionStatusHUD::Status::DISCONNECTED);
 }
