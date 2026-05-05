@@ -53,6 +53,8 @@ The script creates:
 build/sprig-px4xplane-v3.4.2-sprig.1-macos.zip
 ```
 
+After creating the zip, the script prints the exact install command for that package. It is safe to re-run with `unzip -o` when replacing an existing plugin install.
+
 The zip layout is:
 
 ```text
@@ -75,6 +77,12 @@ Unzip the package into:
 
 ```text
 ~/X-Plane 12/Resources/plugins/px4xplane
+```
+
+For a locally built package, install it all at once with:
+
+```bash
+cd "$HOME/X-Plane 12/Resources/plugins" && unzip -o /Users/briankeeley/repos/sprig-px4xplane/build/sprig-px4xplane-v3.4.2-sprig.1-macos.zip
 ```
 
 Then start X-Plane 12. The Sprig build starts listening on TCP `4560` when the plugin starts or is enabled.

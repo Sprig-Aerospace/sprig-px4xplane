@@ -20,7 +20,8 @@ public:
     static void receiveHILActuatorControls(uint8_t* buffer, int size);
     static Eigen::Vector3f computeAcceleration();
     static void setAccelerationData(mavlink_hil_sensor_t& hil_sensor);
-    static void reset();  // CRITICAL: Reset all static state on disconnect
+    static void reset(bool resetCalibration = false);  // CRITICAL: Reset all static state on disconnect/reconnect
+    static uint32_t getSessionResetGeneration();
 
     struct HILActuatorControlsData {
         uint64_t timestamp;

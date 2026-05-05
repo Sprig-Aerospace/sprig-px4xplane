@@ -512,16 +512,21 @@ static float lastSensorSendTime = 0.0f;
 static float lastGpsSendTime = 0.0f;
 static float lastStateQuatSendTime = 0.0f;
 static float lastRcSendTime = 0.0f;
+static int sensorMessageCount = 0;
+static float sensorRateSum = 0.0f;
 
 float lastFlightTime = 0.0f;
 
 // Implementation of resetFlightLoopTimers (declared earlier, defined here after statics)
 void resetFlightLoopTimers() {
-	lastSensorSendTime = 0.0f;
-	lastGpsSendTime = 0.0f;
-	lastStateQuatSendTime = 0.0f;
-	lastRcSendTime = 0.0f;
-	XPLMDebugString("px4xplane: Flight loop timers reset\n");
+	lastSensorSendTime = -1000000.0f;
+	lastGpsSendTime = -1000000.0f;
+	lastStateQuatSendTime = -1000000.0f;
+	lastRcSendTime = -1000000.0f;
+	lastFlightTime = 0.0f;
+	sensorMessageCount = 0;
+	sensorRateSum = 0.0f;
+	XPLMDebugString("px4xplane: Flight loop timers reset; next PX4 session will send frames immediately\n");
 }
 
 float MyFlightLoopCallback(float inElapsedSinceLastCall, float inElapsedTimeSinceLastFlightLoop, int inCounter, void* inRefcon) {
@@ -610,10 +615,7 @@ float MyFlightLoopCallback(float inElapsedSinceLastCall, float inElapsedTimeSinc
 			toggleEnable();
 		}
 		// Reset all timing trackers on simulation restart
-		lastSensorSendTime = 0.0f;
-		lastGpsSendTime = 0.0f;
-		lastStateQuatSendTime = 0.0f;
-		lastRcSendTime = 0.0f;
+		resetFlightLoopTimers();
 	}
 
 	// ==================================================================================
@@ -623,27 +625,25 @@ float MyFlightLoopCallback(float inElapsedSinceLastCall, float inElapsedTimeSinc
 	// Send sensor data at target rate
 	if ((currentSimTime - lastSensorSendTime) >= TARGET_SENSOR_PERIOD) {
 		MAVLinkManager::sendHILSensor(0);
+		if (!ConnectionManager::isConnected()) return -1.0f;
 
-		// Statistics tracking for debugging
-		static int sensorMessageCount = 0;
-		static float sumRate = 0.0f;
 		sensorMessageCount++;
 
 		float actualDt_sec = currentSimTime - lastSensorSendTime;
 		if (actualDt_sec > 0.0f) {
 			float actualRate = 1.0f / actualDt_sec;
-			sumRate += actualRate;
+			sensorRateSum += actualRate;
 		}
 
 		// Log statistics every 1000 messages (~5 seconds at 200Hz)
 		if (ConfigManager::debug_log_sensor_timing && sensorMessageCount % 1000 == 0) {
-			float avgRate = sumRate / 1000.0f;
+			float avgRate = sensorRateSum / 1000.0f;
 			char buf[256];
 			snprintf(buf, sizeof(buf),
 				"px4xplane: [%.1fs] HIL_SENSOR: %d msgs, avg %.1f Hz (target %d Hz)\n",
 				currentSimTime, sensorMessageCount, avgRate, ConfigManager::mavlink_sensor_rate_hz);
 			XPLMDebugString(buf);
-			sumRate = 0.0f;
+			sensorRateSum = 0.0f;
 		}
 
 		lastSensorSendTime = currentSimTime;
@@ -652,18 +652,21 @@ float MyFlightLoopCallback(float inElapsedSinceLastCall, float inElapsedTimeSinc
 	// Send GPS data at target rate (20 Hz) - one message per eligible frame
 	if ((currentSimTime - lastGpsSendTime) >= TARGET_GPS_PERIOD) {
 		MAVLinkManager::sendHILGPS();
+		if (!ConnectionManager::isConnected()) return -1.0f;
 		lastGpsSendTime = currentSimTime;
 	}
 
 	// Optional: Send state quaternion data (10 Hz)
 	if ((currentSimTime - lastStateQuatSendTime) >= TARGET_STATE_QUAT_PERIOD) {
 		MAVLinkManager::sendHILStateQuaternion();
+		if (!ConnectionManager::isConnected()) return -1.0f;
 		lastStateQuatSendTime = currentSimTime;
 	}
 
 	// Optional: Send RC data (10 Hz)
 	if ((currentSimTime - lastRcSendTime) >= TARGET_RC_PERIOD) {
 		MAVLinkManager::sendHILRCInputs();
+		if (!ConnectionManager::isConnected()) return -1.0f;
 		lastRcSendTime = currentSimTime;
 	}
 

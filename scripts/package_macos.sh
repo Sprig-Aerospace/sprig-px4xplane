@@ -57,3 +57,6 @@ rm -f "${ZIP_PATH}"
 )
 
 echo "Created ${ZIP_PATH}"
+echo
+echo "Install into X-Plane 12 with:"
+echo "  cd \"\$HOME/X-Plane 12/Resources/plugins\" && unzip -o \"${ZIP_PATH}\""

@@ -240,6 +240,17 @@ void ConnectionManager::tryAcceptConnection() {
     XPLMDebugString(connectedBuf);
     connected = true;
 
+    // A newly accepted TCP socket is a new PX4 simulator session. Reset all
+    // session-scoped timing, parser, sequence, and actuator state before the
+    // flight loop sends the first frame. Keep accelerometer calibration across
+    // reconnects; recalibrating during PX4 startup can delay EKF accel-bias
+    // convergence and block arming.
+    extern void resetFlightLoopTimers();  // Defined in px4xplane.cpp
+    resetFlightLoopTimers();
+    DataRefManager::resetActuatorValues();
+    MAVLinkManager::reset(false);
+    XPLMDebugString("px4xplane: PX4 session reset complete after client accept.\n");
+
     // UX FIX (January 2025): Update status and notify user
     status = "PX4 connected";
     setLastMessage("PX4 connected; HIL messages active.");
@@ -373,8 +384,10 @@ void ConnectionManager::handleClientDisconnect(const std::string& reason, bool r
     bool hadClient = connected || newsockfd != INVALID_SOCKET;
 
     if (resetAircraftState && hadClient) {
+        extern void resetFlightLoopTimers();  // Defined in px4xplane.cpp
+        resetFlightLoopTimers();
         DataRefManager::resetActuatorValues();
-        MAVLinkManager::reset();
+        MAVLinkManager::reset(false);
         DataRefManager::disableOverride();
     }
 

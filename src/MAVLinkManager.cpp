@@ -16,10 +16,13 @@
 // Define and initialize the static member
 MAVLinkManager::HILActuatorControlsData MAVLinkManager::hilActuatorControlsData = {};
 
-// CRITICAL BUG FIX (January 2025): Timing state reset flag
-// Signals all sensor functions to reset their function-scope static timing variables
-// This prevents timestamp jumps and state corruption on disconnect/reconnect cycles
-static bool g_needsTimingReset = false;
+// CRITICAL BUG FIX (January 2025, hardened for Sprig): session reset generation.
+// Function-scope statics compare this value to their local generation so every
+// sender/parser resets exactly once per PX4 session. A single boolean was unsafe:
+// sendHILSensor() could clear it before GPS/state/RC paths observed the reset.
+static uint32_t g_sessionResetGeneration = 1;
+static bool g_firstSensorFrameLogged = false;
+static bool g_firstActuatorFrameLogged = false;
 
 
 
@@ -111,11 +114,13 @@ Eigen::Vector3f MAVLinkManager::computeAcceleration() {
 	// static const uint64_t BIAS_UPDATE_INTERVAL_US = 100000;  // Update every 100ms (10 Hz)
 
 	// CRITICAL BUG FIX (January 2025): Reset timing state on reconnection
-	if (g_needsTimingReset) {
+	static uint32_t localResetGeneration = 0;
+	if (localResetGeneration != g_sessionResetGeneration) {
 		lastAccelUpdateTime = 0;
 		cachedAccel = Eigen::Vector3f(0.0f, 0.0f, 0.0f);
 		accel_bias_drift = Eigen::Vector3f(0.0f, 0.0f, 0.0f);
 		lastBiasUpdateTime = 0;
+		localResetGeneration = g_sessionResetGeneration;
 	}
 
 	// Get the current time in microseconds.
@@ -386,14 +391,14 @@ void MAVLinkManager::sendHILSensor(uint8_t sensor_id = 0) {
 
 	// CRITICAL BUG FIX (January 2025): Reset timing state on reconnection
 	// This prevents timestamp jumps that cause PX4 lockstep_scheduler to hang
-	if (g_needsTimingReset) {
+	static uint32_t localResetGeneration = 0;
+	if (localResetGeneration != g_sessionResetGeneration) {
 		lastSensorTime = 0;
 		sensorCount = 0;
 		sensor_timestamp_offset[0] = 0;
 		sensor_timestamp_offset[1] = 0;
 		offset_initialized = false;
-		// Clear flag after first sensor function resets (prevents re-initialization every frame)
-		g_needsTimingReset = false;
+		localResetGeneration = g_sessionResetGeneration;
 	}
 
 	// Initialize persistent timestamp offsets once at startup
@@ -477,6 +482,15 @@ void MAVLinkManager::sendHILSensor(uint8_t sensor_id = 0) {
 	int len = mavlink_msg_to_send_buffer(buffer, &msg);
 	ConnectionManager::sendData(buffer, len);
 
+	if (!g_firstSensorFrameLogged && ConnectionManager::isConnected()) {
+		char buf[256];
+		snprintf(buf, sizeof(buf),
+			"px4xplane: First sensor frame sent for PX4 session reset generation %u (time=%llu us, packet=%d bytes)\n",
+			g_sessionResetGeneration, (unsigned long long)hil_sensor.time_usec, len);
+		XPLMDebugString(buf);
+		g_firstSensorFrameLogged = true;
+	}
+
 	// Debug first message sent confirmation
 	if (sensorCount == 1 && ConfigManager::debug_log_sensor_timing) {
 		char buf[256];
@@ -530,13 +544,15 @@ void MAVLinkManager::sendHILGPS() {
 	static int gpsCount = 0;
 
 	// CRITICAL BUG FIX (January 2025): Reset timing state on reconnection
-	if (g_needsTimingReset) {
+	static uint32_t localResetGeneration = 0;
+	if (localResetGeneration != g_sessionResetGeneration) {
 		lastGPSTime = 0;
 		gpsCount = 0;
+		localResetGeneration = g_sessionResetGeneration;
 	}
 
 	mavlink_message_t msg;
-	mavlink_hil_gps_t hil_gps;
+	mavlink_hil_gps_t hil_gps = {};
 
 	// Use high-precision timestamp (fixes EKF2 time_slip from float precision loss)
 	hil_gps.time_usec = TimestampProvider::getTimestampUsec();
@@ -637,12 +653,14 @@ void MAVLinkManager::sendHILStateQuaternion() {
 	static int stateQuatCount = 0;
 
 	// CRITICAL BUG FIX (January 2025): Reset timing state on reconnection
-	if (g_needsTimingReset) {
+	static uint32_t localResetGeneration = 0;
+	if (localResetGeneration != g_sessionResetGeneration) {
 		stateQuatCount = 0;
+		localResetGeneration = g_sessionResetGeneration;
 	}
 
 	mavlink_message_t msg;
-	mavlink_hil_state_quaternion_t hil_state;
+	mavlink_hil_state_quaternion_t hil_state = {};
 
 	populateHILStateQuaternion(hil_state);
 
@@ -775,6 +793,11 @@ void MAVLinkManager::sendHILRCInputs() {
 	// Check if we're connected before proceeding
 	if (!ConnectionManager::isConnected()) return;
 
+	static uint32_t localResetGeneration = 0;
+	if (localResetGeneration != g_sessionResetGeneration) {
+		localResetGeneration = g_sessionResetGeneration;
+	}
+
 	// Create a MAVLink message and the corresponding HIL RC inputs structure
 	mavlink_message_t msg;
 	mavlink_hil_rc_inputs_raw_t hil_rc_inputs = {};  // Zero-initialize all fields
@@ -897,6 +920,18 @@ void MAVLinkManager::processHILActuatorControlsMessage(const mavlink_message_t& 
 		// XPLMDebugString(("px4xplane: Actuator channel " + std::to_string(i) +
 		//     " value: " + std::to_string(MAVLinkManager::hilActuatorControlsData.controls[i]) + "\n").c_str());
 	}
+
+	if (!g_firstActuatorFrameLogged) {
+		char buf[256];
+		snprintf(buf, sizeof(buf),
+			"px4xplane: First actuator frame received for PX4 session reset generation %u (time=%llu us, mode=%u, flags=%llu)\n",
+			g_sessionResetGeneration,
+			(unsigned long long)hil_actuator_controls.time_usec,
+			hil_actuator_controls.mode,
+			(unsigned long long)hil_actuator_controls.flags);
+		XPLMDebugString(buf);
+		g_firstActuatorFrameLogged = true;
+	}
 }
 
 /**
@@ -917,30 +952,41 @@ void MAVLinkManager::processHILActuatorControlsMessage(const mavlink_message_t& 
  * → PX4 lockstep_scheduler received huge timestamp jumps (e.g., 5ms → 1655s)
  * → SITL hung at "setting initial absolute time" message
  *
- * SOLUTION: Set g_needsTimingReset flag to signal all sensor functions
- * → Each function resets its own static timing variables on next call
+ * SOLUTION: Advance g_sessionResetGeneration to signal all sensor functions
+ * → Each function resets its own static timing variables once on next call
  * → Timestamps start fresh from current X-Plane time
  * → PX4 lockstep_scheduler receives clean, monotonic timestamps
  * → Reconnection works reliably after aircraft changes
  */
-void MAVLinkManager::reset() {
+void MAVLinkManager::reset(bool resetCalibration) {
 	// Zero actuator controls data (most critical for control commands)
 	hilActuatorControlsData = {};
 
-	// CRITICAL: Set flag to reset all function-scope timing state
-	// This prevents timestamp jumps that cause PX4 lockstep_scheduler to hang
-	g_needsTimingReset = true;
+	// CRITICAL: advance generation so every function-scope static resets once.
+	g_sessionResetGeneration++;
+	g_firstSensorFrameLogged = false;
+	g_firstActuatorFrameLogged = false;
 
 	// Reset high-precision timestamp provider for clean start on reconnection
 	TimestampProvider::reset();
 
-	// NOTE: Do NOT reset AccelCalibration here!
-	// Calibration should persist across reconnections to avoid recalibrating
-	// with transient post-landing ground states (gear bouncing, aircraft settling).
-	// Resetting caused "High Accelerometer Bias" errors after landing.
-	// Calibration is only reset on true plugin startup (XPluginStart).
+	// Reset MAVLink parser and transmit sequence state so no partial inbound frame
+	// or stale sequence state can leak across PX4 client lifetimes.
+	mavlink_reset_channel_status(MAVLINK_COMM_0);
 
-	XPLMDebugString("px4xplane: MAVLinkManager state reset (calibration preserved)\n");
+	if (resetCalibration) {
+		AccelCalibration::reset();
+	}
+
+	char buf[256];
+	snprintf(buf, sizeof(buf),
+		"px4xplane: MAVLinkManager session reset complete (generation=%u, calibration=%s)\n",
+		g_sessionResetGeneration, resetCalibration ? "reset" : "preserved");
+	XPLMDebugString(buf);
+}
+
+uint32_t MAVLinkManager::getSessionResetGeneration() {
+	return g_sessionResetGeneration;
 }
 
 
