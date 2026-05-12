@@ -607,7 +607,16 @@ float MyFlightLoopCallback(float inElapsedSinceLastCall, float inElapsedTimeSinc
 	ConnectionStatusHUD::notifyConnected();
 
 	// Get current simulation time (frame-rate independent!)
-	float currentSimTime = XPLMGetDataf(XPLMFindDataRef("sim/time/total_flight_time_sec"));
+	// NOTE: use total_running_time_sec, not total_flight_time_sec.
+	// In X-Plane 12, total_flight_time_sec advances at ~1 Hz quantization (observed
+	// median Δt 996 ms on HIL_GPS dispatch even with TARGET_GPS_PERIOD=0.05s),
+	// pinning every rate gate in this callback to ~1 Hz. HIL_SENSOR escapes the
+	// visible symptom because PX4's lockstep replays it from TimestampProvider's
+	// time_usec rather than message arrival cadence, but HIL_GPS gets PX4-side
+	// receive timestamps so the 1 Hz floor shows up in sensor_gps. The same
+	// plugin already uses total_running_time_sec at line ~541 for the connection
+	// wait timer and that one advances at sim FPS, so it's the safer source.
+	float currentSimTime = XPLMGetDataf(XPLMFindDataRef("sim/time/total_running_time_sec"));
 
 	// Check for simulation restart
 	if (currentSimTime < lastFlightTime) {

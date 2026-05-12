@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [3.4.4-sprig.1] - 2026-05-11
+
+### Fixed
+
+- **HIL_GPS no longer pinned to ~1 Hz** (`src/px4xplane.cpp`).
+  `MyFlightLoopCallback` was reading `sim/time/total_flight_time_sec` for
+  its rate-gate arithmetic. In X-Plane 12 that dataref advances at ~1 Hz
+  quantization, so every `(currentSimTime - last*SendTime) >= TARGET_*_PERIOD`
+  check fired at most once per second regardless of `TARGET_GPS_PERIOD`.
+  HIL_SENSOR didn't show the symptom because PX4 lockstep replays it from
+  `TimestampProvider::getTimestampUsec()` (smooth), but HIL_GPS is
+  timestamped at PX4 receive time, so the 1 Hz floor was visible in
+  `sensor_gps` and starved EKF position fusion (XY error p95 ~4 m, max
+  ~12 m at 3 m/s cruise on the Sprig S1000 mission).
+
+  Switched to `sim/time/total_running_time_sec`, which already advances at
+  sim FPS in this plugin (it is the source used by the connection-wait
+  timer at line ~541) and so makes every rate gate fire at the configured
+  cadence.
+
+---
+
 ## [3.4.3-sprig.1] - 2026-05-11
 
 ### Fixed
