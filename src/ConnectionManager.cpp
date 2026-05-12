@@ -26,6 +26,12 @@
 #include <ConfigManager.h>
 #include "ConnectionStatusHUD.h"
 
+// Defined in px4xplane.cpp; recomputes TARGET_*_PERIOD from ConfigManager fields.
+// Must be called after ConfigManager::loadConfiguration() so config.ini values
+// (e.g. mavlink_gps_rate_hz) actually drive dispatch instead of the static
+// defaults baked in at XPluginStart.
+extern void initializeMessagePeriods();
+
 #if LIN || APL
 #define INVALID_SOCKET -1
 #endif
@@ -279,6 +285,11 @@ void ConnectionManager::tryAcceptConnection() {
      // Load motor mappings from config.ini
      ConfigManager::loadConfiguration();
      XPLMDebugString("px4xplane: Motor mappings loaded from config.ini.\n");
+
+     // Refresh TARGET_*_PERIOD now that config.ini values are loaded.
+     // Without this, periods stay at the defaults set by initializeMessagePeriods()
+     // during XPluginStart (e.g. GPS=10Hz default ignores mavlink_gps_rate_hz=20).
+     initializeMessagePeriods();
 
      // Debug: Log loaded configuration
      std::string debugMsg = "Config Name: " + ConfigManager::getConfigName();
