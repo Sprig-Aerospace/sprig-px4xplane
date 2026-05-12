@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [3.4.3-sprig.1] - 2026-05-11
+
+### Fixed
+
+- **Config-driven MAVLink rates are now honored after auto-load** (`src/ConnectionManager.cpp`).
+  `ConnectionManager::tryAcceptConnection()` calls `ConfigManager::loadConfiguration()`
+  when PX4 first connects on TCP 4560, but previously did not re-run
+  `initializeMessagePeriods()`. As a result, operator-edited rates in `config.ini`
+  (e.g. `mavlink_gps_rate_hz = 20`) were silently ignored and dispatch stayed at
+  the static defaults baked in during `XPluginStart` (GPS=10 Hz).
+  This commit mirrors the existing menu-driven path (`px4xplane.cpp:296-299`),
+  which already re-initializes periods after `loadConfiguration()`.
+
+  Observable evidence prior to this fix: the plugin's own log printed
+  inconsistent rate banners on every start —
+  `Message periods initialized - ... GPS:0.1000s (10Hz)` vs.
+  `MAVLink rates - ... GPS:20Hz` — and PX4-side `sensor_gps` cadence matched
+  the default rate, not the configured one.
+
+---
+
 ## [3.4.2] - 2025-02-01
 
 ### Added
