@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [3.4.5-sprig.1] - 2026-05-11
+
+### Fixed
+
+- **HIL_GPS dispatch rate now actually matches `mavlink_gps_rate_hz`** (`src/px4xplane.cpp`).
+
+  v3.4.4-sprig.1 switched the flight-loop dispatch clock from
+  `sim/time/total_flight_time_sec` → `sim/time/total_running_time_sec` because
+  the former was observed to advance at ~1 Hz quantization in X-Plane 12. Field
+  testing showed `total_running_time_sec` reproduces the same 1 Hz floor
+  (Δt median 1000 ms on `sensor_gps` despite TARGET_GPS_PERIOD = 0.05 s).
+
+  Replaced the dataref-based timer with a plugin-local monotonic clock
+  accumulated from `inElapsedSinceLastCall` (X-Plane's per-callback wall-time
+  delta) into a `double`. All `last*SendTime` accumulators converted to
+  `double` as well. This is the canonical X-Plane SDK pattern for
+  frame-rate-independent timing and removes any dependency on dataref
+  precision/quantization behavior.
+
+  HIL_SENSOR didn't visibly suffer because PX4 lockstep replays it from
+  `TimestampProvider::getTimestampUsec()`, but HIL_GPS got PX4-side
+  receive timestamps and showed the 1 Hz floor directly in `sensor_gps`.
+  After this change, `sensor_gps` cadence in PX4 ulogs should match the
+  configured `mavlink_gps_rate_hz`.
+
+---
+
 ## [3.4.4-sprig.1] - 2026-05-11
 
 ### Fixed

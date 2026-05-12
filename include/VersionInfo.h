@@ -24,7 +24,7 @@ namespace PX4XPlaneVersion {
     // =================================================================
 
     /** Plugin version string - displayed in UI and About dialog */
-    constexpr const char* VERSION = "3.4.4-sprig.1";
+    constexpr const char* VERSION = "3.4.5-sprig.1";
 
     /** Version phase description */
     constexpr const char* PHASE = "Sprig HITL";
@@ -33,7 +33,7 @@ namespace PX4XPlaneVersion {
     constexpr const char* YEAR = "2026";
 
     /** Plugin build number - increment for each build */
-    constexpr const char* BUILD = "sprig-003";
+    constexpr const char* BUILD = "sprig-004";
 
     // =================================================================
     // AUTHOR AND PROJECT INFORMATION  

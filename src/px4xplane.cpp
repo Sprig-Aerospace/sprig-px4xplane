@@ -507,11 +507,20 @@ void initializeMessagePeriods() {
 }
 
 // Track LAST SEND TIME (not accumulated time!)
-// This approach is frame-rate independent and works at any FPS (30-150+)
-static float lastSensorSendTime = 0.0f;
-static float lastGpsSendTime = 0.0f;
-static float lastStateQuatSendTime = 0.0f;
-static float lastRcSendTime = 0.0f;
+// This approach is frame-rate independent and works at any FPS (30-150+).
+//
+// We accumulate a plugin-local clock from inElapsedSinceLastCall (X-Plane's
+// per-callback wall-time delta, float seconds) into a double. Reading
+// sim/time/total_*_sec datarefs is unreliable for this purpose in X-Plane 12:
+// total_flight_time_sec advances at ~1 Hz quantization (observed Δt median
+// 996 ms on HIL_GPS dispatch even with TARGET_GPS_PERIOD=0.05s), and
+// total_running_time_sec reproduced the same 1 Hz floor in field testing
+// against the Sprig HITL stack on macOS 26.2 / Apple M4 Max.
+static double pluginClockSec = 0.0;
+static double lastSensorSendTime = -1.0e6;
+static double lastGpsSendTime = -1.0e6;
+static double lastStateQuatSendTime = -1.0e6;
+static double lastRcSendTime = -1.0e6;
 static int sensorMessageCount = 0;
 static float sensorRateSum = 0.0f;
 
@@ -519,10 +528,11 @@ float lastFlightTime = 0.0f;
 
 // Implementation of resetFlightLoopTimers (declared earlier, defined here after statics)
 void resetFlightLoopTimers() {
-	lastSensorSendTime = -1000000.0f;
-	lastGpsSendTime = -1000000.0f;
-	lastStateQuatSendTime = -1000000.0f;
-	lastRcSendTime = -1000000.0f;
+	pluginClockSec = 0.0;
+	lastSensorSendTime = -1.0e6;
+	lastGpsSendTime = -1.0e6;
+	lastStateQuatSendTime = -1.0e6;
+	lastRcSendTime = -1.0e6;
 	lastFlightTime = 0.0f;
 	sensorMessageCount = 0;
 	sensorRateSum = 0.0f;
@@ -606,26 +616,16 @@ float MyFlightLoopCallback(float inElapsedSinceLastCall, float inElapsedTimeSinc
 	// Notify HUD that we're actively connected (for FPS monitoring)
 	ConnectionStatusHUD::notifyConnected();
 
-	// Get current simulation time (frame-rate independent!)
-	// NOTE: use total_running_time_sec, not total_flight_time_sec.
-	// In X-Plane 12, total_flight_time_sec advances at ~1 Hz quantization (observed
-	// median Δt 996 ms on HIL_GPS dispatch even with TARGET_GPS_PERIOD=0.05s),
-	// pinning every rate gate in this callback to ~1 Hz. HIL_SENSOR escapes the
-	// visible symptom because PX4's lockstep replays it from TimestampProvider's
-	// time_usec rather than message arrival cadence, but HIL_GPS gets PX4-side
-	// receive timestamps so the 1 Hz floor shows up in sensor_gps. The same
-	// plugin already uses total_running_time_sec at line ~541 for the connection
-	// wait timer and that one advances at sim FPS, so it's the safer source.
-	float currentSimTime = XPLMGetDataf(XPLMFindDataRef("sim/time/total_running_time_sec"));
-
-	// Check for simulation restart
-	if (currentSimTime < lastFlightTime) {
-		if (ConnectionManager::isConnected()) {
-			toggleEnable();
-		}
-		// Reset all timing trackers on simulation restart
-		resetFlightLoopTimers();
-	}
+	// Plugin-local monotonic clock, double precision, accumulated from
+	// inElapsedSinceLastCall (X-Plane's per-callback wall-time delta in seconds).
+	// We previously read sim/time/total_*_sec datarefs and used static float
+	// accumulators; both total_flight_time_sec AND total_running_time_sec were
+	// observed to advance at ~1 Hz quantization on X-Plane 12 / macOS in field
+	// testing (Δt median ~996-1000 ms on HIL_GPS dispatch despite
+	// TARGET_GPS_PERIOD=0.05s). Accumulating per-frame deltas into a double
+	// sidesteps that entirely and is the canonical X-Plane SDK pattern.
+	pluginClockSec += static_cast<double>(inElapsedSinceLastCall);
+	double currentSimTime = pluginClockSec;
 
 	// ==================================================================================
 	// SENSOR DATA - Direct sendHILSensor() at target rate
@@ -638,9 +638,9 @@ float MyFlightLoopCallback(float inElapsedSinceLastCall, float inElapsedTimeSinc
 
 		sensorMessageCount++;
 
-		float actualDt_sec = currentSimTime - lastSensorSendTime;
-		if (actualDt_sec > 0.0f) {
-			float actualRate = 1.0f / actualDt_sec;
+		double actualDt_sec = currentSimTime - lastSensorSendTime;
+		if (actualDt_sec > 0.0) {
+			float actualRate = static_cast<float>(1.0 / actualDt_sec);
 			sensorRateSum += actualRate;
 		}
 
@@ -689,7 +689,7 @@ float MyFlightLoopCallback(float inElapsedSinceLastCall, float inElapsedTimeSinc
 	// Update the SITL timestep with the loop callback rate
 	DataRefManager::SIM_Timestep = inElapsedSinceLastCall;
 
-	lastFlightTime = currentSimTime;
+	lastFlightTime = static_cast<float>(currentSimTime);
 
 	// Return -1.0f to be called EVERY FRAME (most robust for frame-rate independence)
 	// This ensures the plugin works correctly at any X-Plane FPS (30-150+)
