@@ -119,8 +119,50 @@ Or run a single scenario:
 python3 tools/px4_tcp_lifecycle_harness.py --scenario probe-resistance
 ```
 
-The harness binds an ephemeral TCP port by default and exercises the Sprig socket ownership contract: clean startup, probe cleanup, stale client replacement, send-failure reconnect, and idempotent reload cleanup. Use `--port 4560` only when X-Plane is not running and the operational port is intentionally free.
+Run the structured transport-session self-test before any live PX4 or X-Plane bring-up:
 
+```bash
+python3 tools/px4_tcp_lifecycle_harness.py --self-test
+```
+
+The harness binds an ephemeral TCP port by default and exercises the Sprig socket ownership contract: clean startup, probe cleanup, stale client replacement, send-failure reconnect, and idempotent reload cleanup. Use `--port 4560` only when X-Plane is not running and the operational port is intentionally free.
+## Diagnostics
+
+Capture a timestamped evidence bundle for Linear or GitHub issues:
+
+```bash
+python3 scripts/hitl_diagnostic_bundle.py
+```
+
+The bundle is written under `build/diagnostics/` and includes X-Plane `Log.txt` px4xplane excerpts, TCP `4560` socket snapshots, plugin config, version metadata, recent PX4 simulator logs when found, readiness output, package smoke output, and harness output. Attach the whole bundle directory, or zip it, to the issue.
+
+## Validation
+
+Fast local validation for pre-commit use:
+
+```bash
+python3 tools/validate_harness.py quick
+```
+
+That quick tier now includes the structured transport-session self-test and source seam checks, so it is the required no-spool checkpoint before live HITL transport debugging.
+
+Print the quick command list without running it:
+
+```bash
+python3 tools/validate_harness.py quick --dry-run
+```
+
+Build-inclusive validation:
+
+```bash
+python3 tools/validate_harness.py standard
+```
+
+Full package validation:
+
+```bash
+python3 tools/validate_harness.py full
+```
 ## Reset
 
 From X-Plane, open Plugin Admin, disable the Sprig PX4-XPlane plugin, then enable it again. Disable/stop closes all plugin-owned sockets. Enabling the plugin starts a fresh listener on TCP `4560`.

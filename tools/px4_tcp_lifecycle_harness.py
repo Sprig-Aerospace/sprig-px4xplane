@@ -1,18 +1,9 @@
 #!/usr/bin/env python3
 """Exercise the Sprig px4xplane TCP lifecycle contract without X-Plane.
 
-The real plugin runs inside X-Plane, so this harness models the socket ownership
-rules that matter for PX4 HITL on TCP 4560:
-
-- keep one listener alive
-- accept a PX4 client
-- close dead accepted clients immediately
-- prefer a newer accepted client over a stale one
-- keep listening after client failure
-- close listener and client idempotently on plugin reload/disable
-
-Use an ephemeral port by default. Pass --port 4560 only when X-Plane is not
-running and you explicitly want to exercise the operational port.
+The real plugin runs inside X-Plane, so this contract-only harness models the
+socket ownership rules and structured transport-session events that matter for
+PX4 HITL on TCP 4560.
 """
 
 from __future__ import annotations
@@ -24,9 +15,11 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 ROOT = Path(__file__).resolve().parents[1]
+MAX_NONBLOCKING_SEND_ATTEMPTS = 8
+HARNESS_SEND_BUFFER_BYTES = 4096
 
 
 class HarnessFailure(AssertionError):
@@ -39,11 +32,67 @@ class HarnessServer:
     requested_port: int = 0
     listener: socket.socket | None = None
     client: socket.socket | None = None
-    events: list[str] = field(default_factory=list)
+    events: list[dict[str, Any]] = field(default_factory=list)
+    generation: int = 0
+    reset_cause: str = "none"
+    started_at: float = field(default_factory=time.monotonic)
+    listener_active: bool = False
+    client_active: bool = False
+    consecutive_backpressure_events: int = 0
+    consecutive_retry_limit_events: int = 0
+    last_flight_loop_elapsed_sec: float = 0.0
+    last_flight_loop_elapsed_since_last_sec: float = 0.0
+    last_flight_loop_counter: int = 0
+
+    def emit(
+        self,
+        event: str,
+        cause: str,
+        *,
+        socket_error_code: int = 0,
+        **extra: Any,
+    ) -> None:
+        elapsed = max(0.0, time.monotonic() - self.started_at)
+        payload = {
+            "event": event,
+            "generation": self.generation,
+            "reset_cause": self.reset_cause,
+            "cause": cause,
+            "socket_error_code": socket_error_code,
+            "session_age_ms": int(elapsed * 1000),
+            "listener_active": self.listener_active,
+            "client_active": self.client_active,
+            "waiting_for_reconnect": self.listener_active and not self.client_active,
+            "consecutive_backpressure_events": self.consecutive_backpressure_events,
+            "consecutive_retry_limit_events": self.consecutive_retry_limit_events,
+            "flight_loop_elapsed_sec": self.last_flight_loop_elapsed_sec,
+            "flight_loop_elapsed_since_last_sec": self.last_flight_loop_elapsed_since_last_sec,
+            "flight_loop_counter": self.last_flight_loop_counter,
+            "estimated_fps": (1.0 / self.last_flight_loop_elapsed_sec)
+            if self.last_flight_loop_elapsed_sec > 0.0
+            else 0.0,
+        }
+        payload.update(extra)
+        self.events.append(payload)
+
+    def note_flight_loop(
+        self,
+        *,
+        elapsed_since_last_call: float,
+        elapsed_since_last_flight_loop: float,
+        counter: int,
+    ) -> None:
+        self.last_flight_loop_elapsed_sec = elapsed_since_last_call
+        self.last_flight_loop_elapsed_since_last_sec = elapsed_since_last_flight_loop
+        self.last_flight_loop_counter = counter
+
+    def reset_session_counters(self) -> None:
+        self.consecutive_backpressure_events = 0
+        self.consecutive_retry_limit_events = 0
 
     def start(self) -> None:
         if self.listener is not None:
-            self.events.append("listening already active")
+            self.emit("listener_ready", "listener_already_active")
             return
 
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -52,7 +101,9 @@ class HarnessServer:
         listener.listen(5)
         listener.setblocking(False)
         self.listener = listener
-        self.events.append(f"listening {self.port}")
+        self.listener_active = True
+        self.client_active = False
+        self.emit("listener_ready", "tcp_listener_started", port=self.port)
 
     @property
     def port(self) -> int:
@@ -75,27 +126,71 @@ class HarnessServer:
                 time.sleep(0.01)
                 continue
 
-            accepted.settimeout(0.2)
+            accepted.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, HARNESS_SEND_BUFFER_BYTES)
+            accepted.setblocking(False)
             if self.client is not None:
-                self.events.append("stale client closed")
+                self.emit("stale_client_replaced", "newer_px4_client_accepted")
                 self._close_client()
             self.client = accepted
-            self.events.append(f"PX4 connected {address[0]}:{address[1]}")
+            self.client_active = True
+            self.generation += 1
+            self.reset_cause = "client_accept"
+            self.reset_session_counters()
+            self.emit(
+                "client_connected",
+                "px4_tcp_client_accepted",
+                remote=f"{address[0]}:{address[1]}",
+            )
+            self.emit("session_reset", "client_accept_reset")
             accepted_any = True
 
         return accepted_any
 
     def send_payload(self, payload: bytes = b"hil") -> bool:
         if self.client is None:
-            self.events.append("send skipped no client")
+            self.emit("send_skipped", "no_client")
             return False
-        try:
-            self.client.sendall(payload)
-        except OSError as error:
-            self.events.append(f"send failed {error.__class__.__name__}")
-            self._close_client()
-            self.events.append("waiting for PX4 reconnect")
+
+        total_sent = 0
+        attempts = 0
+        view = memoryview(payload)
+
+        while total_sent < len(payload) and attempts < MAX_NONBLOCKING_SEND_ATTEMPTS:
+            attempts += 1
+            try:
+                sent = self.client.send(view[total_sent:])
+            except BlockingIOError:
+                self.consecutive_backpressure_events += 1
+                self.emit("send_backpressure", "px4_client_not_reading")
+                self._disconnect_client("send backpressure persisted; PX4 TCP client stopped reading.")
+                return False
+            except InterruptedError:
+                continue
+            except OSError as error:
+                self.emit(
+                    "send_failure",
+                    "socket_send_failed",
+                    socket_error_code=getattr(error, "errno", 0) or 0,
+                    socket_error_label=error.__class__.__name__,
+                )
+                self._disconnect_client(f"send failed: {error.__class__.__name__}")
+                return False
+
+            if sent == 0:
+                self.emit("send_zero_bytes", "peer_closed_during_send")
+                self._disconnect_client("send returned zero bytes; PX4 client closed.")
+                return False
+
+            self.reset_session_counters()
+            total_sent += sent
+
+        if total_sent < len(payload):
+            self.consecutive_retry_limit_events += 1
+            self.emit("send_retry_limit", "non_blocking_send_retry_limit")
+            self._disconnect_client("send backpressure persisted after retry limit.")
             return False
+
+        self.reset_session_counters()
         return True
 
     def receive_once(self) -> bytes:
@@ -103,18 +198,21 @@ class HarnessServer:
             return b""
         try:
             data = self.client.recv(4096)
-        except socket.timeout:
+        except (BlockingIOError, socket.timeout):
             return b""
         except OSError as error:
-            self.events.append(f"receive failed {error.__class__.__name__}")
-            self._close_client()
-            self.events.append("waiting for PX4 reconnect")
+            self.emit(
+                "receive_failure",
+                "socket_receive_failed",
+                socket_error_code=getattr(error, "errno", 0) or 0,
+                socket_error_label=error.__class__.__name__,
+            )
+            self._disconnect_client(f"receive failed: {error.__class__.__name__}")
             return b""
 
         if data == b"":
-            self.events.append("PX4 disconnected peer closed")
-            self._close_client()
-            self.events.append("waiting for PX4 reconnect")
+            self.emit("receive_zero_bytes", "peer_closed_during_receive")
+            self._disconnect_client("PX4 client closed the TCP connection.")
         return data
 
     def close(self) -> None:
@@ -122,7 +220,18 @@ class HarnessServer:
         if self.listener is not None:
             self.listener.close()
             self.listener = None
-            self.events.append("listener closed")
+            self.listener_active = False
+            self.emit("listener_closed", "manual_disconnect")
+
+    def _disconnect_client(self, reason: str) -> None:
+        self.reset_cause = "client_disconnect_reset"
+        self.client_active = False
+        self._close_client()
+        if self.listener is not None:
+            self.emit("waiting_for_reconnect", reason)
+        else:
+            self.emit("client_disconnected", reason)
+        self.reset_session_counters()
 
     def _close_client(self) -> None:
         if self.client is not None:
@@ -132,7 +241,7 @@ class HarnessServer:
                 pass
             self.client.close()
             self.client = None
-            self.events.append("client closed")
+        self.client_active = False
 
 
 def connect_client(port: int) -> socket.socket:
@@ -146,7 +255,15 @@ def require(condition: bool, message: str) -> None:
         raise HarnessFailure(message)
 
 
+def require_event(server: HarnessServer, event: str) -> dict[str, Any]:
+    for payload in server.events:
+        if payload["event"] == event:
+            return payload
+    raise HarnessFailure(f"missing transport event: {event}")
+
+
 def scenario_clean_startup(server: HarnessServer) -> None:
+    server.note_flight_loop(elapsed_since_last_call=0.02, elapsed_since_last_flight_loop=0.02, counter=1)
     server.start()
     client = connect_client(server.port)
     try:
@@ -158,6 +275,7 @@ def scenario_clean_startup(server: HarnessServer) -> None:
 
 
 def scenario_probe_resistance(server: HarnessServer) -> None:
+    server.note_flight_loop(elapsed_since_last_call=0.05, elapsed_since_last_flight_loop=0.05, counter=2)
     server.start()
     probe = connect_client(server.port)
     require(server.accept_pending(), "server did not accept probe")
@@ -180,6 +298,7 @@ def scenario_probe_resistance(server: HarnessServer) -> None:
 
 
 def scenario_stale_client_replacement(server: HarnessServer) -> None:
+    server.note_flight_loop(elapsed_since_last_call=0.016, elapsed_since_last_flight_loop=0.016, counter=3)
     server.start()
     old_client = connect_client(server.port)
     new_client = connect_client(server.port)
@@ -191,10 +310,11 @@ def scenario_stale_client_replacement(server: HarnessServer) -> None:
         old_client.close()
         new_client.close()
 
-    require("stale client closed" in server.events, "server did not report stale client closure")
+    require_event(server, "stale_client_replaced")
 
 
 def scenario_send_failure_reconnect(server: HarnessServer) -> None:
+    server.note_flight_loop(elapsed_since_last_call=0.02, elapsed_since_last_flight_loop=0.02, counter=4)
     server.start()
     doomed = connect_client(server.port)
     require(server.accept_pending(), "server did not accept doomed client")
@@ -219,7 +339,43 @@ def scenario_send_failure_reconnect(server: HarnessServer) -> None:
         px4.close()
 
 
+def scenario_backpressure_disconnect(server: HarnessServer) -> None:
+    server.note_flight_loop(elapsed_since_last_call=0.01, elapsed_since_last_flight_loop=0.01, counter=5)
+    server.start()
+    stalled = connect_client(server.port)
+    stalled.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, HARNESS_SEND_BUFFER_BYTES)
+    require(server.accept_pending(), "server did not accept stalled client")
+
+    try:
+        failed = False
+        payload = b"x" * 65536
+        for _ in range(256):
+            failed = not server.send_payload(payload)
+            if failed and server.client is None:
+                break
+            time.sleep(0.001)
+
+        require(failed, "non-reading client did not trigger send backpressure")
+        require(server.client is None, "backpressured client remained connected")
+        require(server.listener is not None, "listener closed after send backpressure")
+        require(
+            sum(1 for event in server.events if event["event"] == "send_backpressure") == 1,
+            "backpressure disconnect reason was logged more than once",
+        )
+    finally:
+        stalled.close()
+
+    px4 = connect_client(server.port)
+    try:
+        require(server.accept_pending(), "server did not accept reconnect after backpressure")
+        require(server.send_payload(b"ok"), "server could not send after backpressure reconnect")
+        require(px4.recv(64) == b"ok", "reconnected PX4 did not receive payload")
+    finally:
+        px4.close()
+
+
 def scenario_reload_cleanup(server: HarnessServer) -> None:
+    server.note_flight_loop(elapsed_since_last_call=0.033, elapsed_since_last_flight_loop=0.033, counter=6)
     server.start()
     client = connect_client(server.port)
     require(server.accept_pending(), "server did not accept client before cleanup")
@@ -233,6 +389,7 @@ def scenario_reload_cleanup(server: HarnessServer) -> None:
 
     replacement = HarnessServer(requested_port=port)
     try:
+        replacement.note_flight_loop(elapsed_since_last_call=0.033, elapsed_since_last_flight_loop=0.033, counter=7)
         replacement.start()
         require(replacement.port == port, "port was not reusable after cleanup")
     finally:
@@ -240,12 +397,46 @@ def scenario_reload_cleanup(server: HarnessServer) -> None:
 
 
 SCENARIOS: dict[str, Callable[[HarnessServer], None]] = {
+    "backpressure-disconnect": scenario_backpressure_disconnect,
     "clean-startup": scenario_clean_startup,
     "probe-resistance": scenario_probe_resistance,
-    "stale-client-replacement": scenario_stale_client_replacement,
-    "send-failure-reconnect": scenario_send_failure_reconnect,
     "reload-cleanup": scenario_reload_cleanup,
+    "send-failure-reconnect": scenario_send_failure_reconnect,
+    "stale-client-replacement": scenario_stale_client_replacement,
 }
+
+
+def validate_structured_events(server: HarnessServer, scenario: str) -> None:
+    require(server.events, f"{scenario}: expected structured transport events")
+    generations = {
+        event["generation"]
+        for event in server.events
+        if event["event"] in {"client_connected", "session_reset"}
+    }
+    require(generations, f"{scenario}: no connected generations recorded")
+    for event in server.events:
+        require("generation" in event, f"{scenario}: event missing generation")
+        require("cause" in event, f"{scenario}: event missing cause")
+        require("reset_cause" in event, f"{scenario}: event missing reset_cause")
+        require("listener_active" in event, f"{scenario}: event missing listener_active")
+        require("flight_loop_counter" in event, f"{scenario}: event missing flight_loop_counter")
+
+    if scenario == "backpressure-disconnect":
+        send_backpressure = require_event(server, "send_backpressure")
+        waiting = require_event(server, "waiting_for_reconnect")
+        require(send_backpressure["generation"] == waiting["generation"], "backpressure generation changed mid-disconnect")
+        require(send_backpressure["consecutive_backpressure_events"] >= 1, "backpressure event missing counter")
+        require(waiting["reset_cause"] == "client_disconnect_reset", "backpressure disconnect should mark reset cause")
+    elif scenario == "send-failure-reconnect":
+        waiting = require_event(server, "waiting_for_reconnect")
+        reconnects = [event for event in server.events if event["event"] == "client_connected"]
+        require(len(reconnects) >= 2, "send-failure scenario must reconnect into a new generation")
+        require(reconnects[0]["generation"] != reconnects[-1]["generation"], "reconnect must advance generation")
+        require(waiting["generation"] == reconnects[0]["generation"], "disconnect should stay attached to failed generation")
+    elif scenario == "stale-client-replacement":
+        stale = require_event(server, "stale_client_replaced")
+        reset = require_event(server, "session_reset")
+        require(stale["generation"] <= reset["generation"], "stale replacement should precede or match reset generation")
 
 
 def run_scenario(name: str, *, port: int, emit_json: bool) -> bool:
@@ -253,6 +444,7 @@ def run_scenario(name: str, *, port: int, emit_json: bool) -> bool:
     started_at = time.monotonic()
     try:
         SCENARIOS[name](server)
+        validate_structured_events(server, name)
     except Exception as error:
         result = {
             "scenario": name,
@@ -266,7 +458,7 @@ def run_scenario(name: str, *, port: int, emit_json: bool) -> bool:
         else:
             print(f"[FAIL] {name}: {error}")
             for event in server.events:
-                print(f"  - {event}")
+                print(f"  - {json.dumps(event, sort_keys=True)}")
         return False
     finally:
         server.close()
@@ -284,6 +476,13 @@ def run_scenario(name: str, *, port: int, emit_json: bool) -> bool:
     return True
 
 
+def run_self_test() -> int:
+    ok = True
+    for name in sorted(SCENARIOS):
+        ok = run_scenario(name, port=0, emit_json=False) and ok
+    return 0 if ok else 1
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -299,7 +498,15 @@ def main() -> int:
         help="TCP port to bind. Defaults to an ephemeral port; use 4560 only when safe.",
     )
     parser.add_argument("--json", action="store_true", help="Emit JSON result records.")
+    parser.add_argument(
+        "--self-test",
+        action="store_true",
+        help="Run all offline transport-session assertions.",
+    )
     args = parser.parse_args()
+
+    if args.self_test:
+        return run_self_test()
 
     names = sorted(SCENARIOS) if args.scenario == "all" else [args.scenario]
     ok = True

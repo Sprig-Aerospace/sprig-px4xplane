@@ -540,11 +540,14 @@ void resetFlightLoopTimers() {
 }
 
 float MyFlightLoopCallback(float inElapsedSinceLastCall, float inElapsedTimeSinceLastFlightLoop, int inCounter, void* inRefcon) {
-	// CRITICAL FIX (January 2025): Non-blocking connection polling with timeout
+	// CRITICAL FIX (January 2025): Non-blocking connection polling while waiting indefinitely
 	// Poll for incoming PX4 connection if socket is waiting
 	static float waitStartTime = 0.0f;
-	static const float CONNECTION_TIMEOUT = 30.0f;  // 30 second timeout
-	static bool timeoutReported = false;
+	ConnectionManager::noteFlightLoopTiming(
+		inElapsedSinceLastCall,
+		inElapsedTimeSinceLastFlightLoop,
+		inCounter
+	);
 
 	if (ConnectionManager::isWaitingForConnection()) {
 		// Get current simulation time for timeout tracking
@@ -556,30 +559,12 @@ float MyFlightLoopCallback(float inElapsedSinceLastCall, float inElapsedTimeSinc
 
 		float elapsed = currentSimTime - waitStartTime;
 
-		// Timeout after 30 seconds
-		if (elapsed > CONNECTION_TIMEOUT) {
-			if (!timeoutReported) {
-				XPLMDebugString("px4xplane: PX4 connection wait exceeded 30s; listener remains active on TCP 4560.\n");
-
-				ConnectionManager::setLastMessage(
-					"Connection wait exceeded 30s. Listener remains active on TCP 4560.");
-				XPLMSpeakString("Connection timeout");
-				timeoutReported = true;
-			}
-
-			// Update HUD to show timeout
-			ConnectionStatusHUD::updateStatus(
-				ConnectionStatusHUD::Status::TIMEOUT,
-				"Is PX4 SITL running?"
-			);
-		} else {
-			// Update HUD with current wait time
-			ConnectionStatusHUD::updateStatus(
-				ConnectionStatusHUD::Status::WAITING,
-				"Start PX4 SITL to connect",
-				elapsed
-			);
-		}
+		// Keep showing the live wait time until PX4 connects.
+		ConnectionStatusHUD::updateStatus(
+			ConnectionStatusHUD::Status::WAITING,
+			"Start PX4 SITL to connect",
+			elapsed
+		);
 
 		// Try to accept connection (non-blocking)
 		ConnectionManager::tryAcceptConnection();
@@ -595,10 +580,8 @@ float MyFlightLoopCallback(float inElapsedSinceLastCall, float inElapsedTimeSinc
 			"Ready to fly!"
 		);
 		waitStartTime = 0.0f;
-		timeoutReported = false;
 	} else {
 		waitStartTime = 0.0f;  // Reset when not waiting
-		timeoutReported = false;
 
 		// Hide HUD when not connecting
 		if (!ConnectionManager::isConnected()) {

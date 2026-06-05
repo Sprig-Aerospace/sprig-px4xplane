@@ -28,6 +28,13 @@ def build_commands(tier: str) -> list[ValidationCommand]:
             ("python3", "tools/px4_tcp_lifecycle_harness.py", "--scenario", "all"),
         ),
         ValidationCommand(
+            "px4-tcp-lifecycle-self-test",
+            ("python3", "tools/px4_tcp_lifecycle_harness.py", "--self-test"),
+        ),
+        ValidationCommand(
+            "source-lifecycle-contract-checks",
+            ("python3", "tools/source_lifecycle_contract_checks.py"),
+        ),
             "package-script-syntax",
             ("bash", "-n", "scripts/package_macos.sh"),
         ),

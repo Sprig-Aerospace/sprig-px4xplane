@@ -13,6 +13,8 @@ public:
     static void closeClient(const std::string& reason);
     static void sendData(const uint8_t* buffer, int len);
     static void receiveData();
+    static void noteInboundMavlinkMessage(uint32_t msgid, int payloadLen);
+    static void noteFlightLoopTiming(float elapsedSinceLastCall, float elapsedSinceLastFlightLoop, int counter);
     static bool isConnected();
     static const std::string& getStatus();
     static void setLastMessage(const std::string& message); // Function to set the last message
