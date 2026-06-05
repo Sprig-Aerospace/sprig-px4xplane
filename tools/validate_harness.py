@@ -35,6 +35,7 @@ def build_commands(tier: str) -> list[ValidationCommand]:
             "source-lifecycle-contract-checks",
             ("python3", "tools/source_lifecycle_contract_checks.py"),
         ),
+        ValidationCommand(
             "package-script-syntax",
             ("bash", "-n", "scripts/package_macos.sh"),
         ),

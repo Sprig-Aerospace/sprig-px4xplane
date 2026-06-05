@@ -32,6 +32,10 @@ private:
     static std::string lastMessage; // Variable to keep the last message
     static void handleClientDisconnect(const std::string& reason, bool resetAircraftState = true);
     static bool configureAcceptedSocket(int clientSock);
+    static int getLastSocketError();
+    static bool isSendBackpressureError(int errorCode);
+    static bool isSocketInterrupted(int errorCode);
+    static std::string getSocketErrorString(int errorCode);
     static std::string getSocketErrorString();
 
 };

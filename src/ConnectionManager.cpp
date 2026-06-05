@@ -268,12 +268,40 @@ int ConnectionManager::sitlPort = 4560;
 std::string ConnectionManager::status = "Disconnected";
 std::string ConnectionManager::lastMessage = "";
 
-std::string ConnectionManager::getSocketErrorString() {
+int ConnectionManager::getLastSocketError() {
 #if IBM
-    return std::to_string(WSAGetLastError());
+    return WSAGetLastError();
 #else
-    return strerror(errno);
+    return errno;
 #endif
+}
+
+bool ConnectionManager::isSendBackpressureError(int errorCode) {
+#if IBM
+    return errorCode == WSAEWOULDBLOCK;
+#else
+    return errorCode == EWOULDBLOCK || errorCode == EAGAIN;
+#endif
+}
+
+bool ConnectionManager::isSocketInterrupted(int errorCode) {
+#if IBM
+    return errorCode == WSAEINTR;
+#else
+    return errorCode == EINTR;
+#endif
+}
+
+std::string ConnectionManager::getSocketErrorString(int errorCode) {
+#if IBM
+    return std::to_string(errorCode);
+#else
+    return strerror(errorCode);
+#endif
+}
+
+std::string ConnectionManager::getSocketErrorString() {
+    return getSocketErrorString(getLastSocketError());
 }
 
 bool ConnectionManager::configureAcceptedSocket(int clientSock) {
@@ -285,6 +313,18 @@ bool ConnectionManager::configureAcceptedSocket(int clientSock) {
     int noSigPipe = 1;
     setsockopt(clientSock, SOL_SOCKET, SO_NOSIGPIPE,
                reinterpret_cast<const char*>(&noSigPipe), sizeof(noSigPipe));
+#endif
+
+#if IBM
+    u_long mode = 1;
+    if (ioctlsocket(clientSock, FIONBIO, &mode) != 0) {
+        return false;
+    }
+#elif LIN || APL
+    int flags = fcntl(clientSock, F_GETFL, 0);
+    if (flags < 0 || fcntl(clientSock, F_SETFL, flags | O_NONBLOCK) < 0) {
+        return false;
+    }
 #endif
 
     return true;
