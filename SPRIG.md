@@ -134,7 +134,9 @@ Capture a timestamped evidence bundle for Linear or GitHub issues:
 python3 scripts/hitl_diagnostic_bundle.py
 ```
 
-The bundle is written under `build/diagnostics/` and includes X-Plane `Log.txt` px4xplane excerpts, TCP `4560` socket snapshots, plugin config, version metadata, recent PX4 simulator logs when found, readiness output, package smoke output, and harness output. Attach the whole bundle directory, or zip it, to the issue.
+The bundle is written under `build/diagnostics/` and includes X-Plane `Log.txt` px4xplane excerpts, structured transport events, HIL_SENSOR send-rate summaries, TimestampProvider drift lines when timing debug is enabled, the installed plugin config, and a diff against repo `config/config.ini`. Attach the whole bundle directory, or zip it, to the issue.
+
+For the full operator checklist and decision rules, see [docs/HITL_DIAGNOSTICS.md](docs/HITL_DIAGNOSTICS.md). This is an evidence gate before scheduler changes; do not change HIL_SENSOR cadence, TimestampProvider behavior, TCP transport behavior, or PX4 params while collecting the bundle.
 
 ## Validation
 
