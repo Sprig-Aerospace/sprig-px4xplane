@@ -36,6 +36,10 @@ def build_commands(tier: str) -> list[ValidationCommand]:
             ("python3", "tools/source_lifecycle_contract_checks.py"),
         ),
         ValidationCommand(
+            "hitl-diagnostic-bundle-self-test",
+            ("python3", "scripts/hitl_diagnostic_bundle.py", "--self-test"),
+        ),
+        ValidationCommand(
             "package-script-syntax",
             ("bash", "-n", "scripts/package_macos.sh"),
         ),

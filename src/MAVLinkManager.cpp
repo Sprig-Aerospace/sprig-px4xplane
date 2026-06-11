@@ -880,6 +880,7 @@ void MAVLinkManager::receiveHILActuatorControls(uint8_t* buffer, int size) {
  */
 void MAVLinkManager::handleReceivedMessage(const mavlink_message_t& msg) {
 	//XPLMDebugString(("px4xplane: Received msgid =  " + std::to_string(msg.msgid) + "\n").c_str());
+	ConnectionManager::noteInboundMavlinkMessage(msg.msgid, msg.len);
 	switch (msg.msgid) {
 	case MAVLINK_MSG_ID_HIL_ACTUATOR_CONTROLS:
 		processHILActuatorControlsMessage(msg);
