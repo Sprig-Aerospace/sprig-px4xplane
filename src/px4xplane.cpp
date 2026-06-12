@@ -15,6 +15,7 @@
 #include "DataRefManager.h"
 #include "ConnectionManager.h"
 #include "ConfigManager.h"
+#include "TimestampProvider.h"
 #include <algorithm>
 
 
@@ -609,6 +610,8 @@ float MyFlightLoopCallback(float inElapsedSinceLastCall, float inElapsedTimeSinc
 	// sidesteps that entirely and is the canonical X-Plane SDK pattern.
 	pluginClockSec += static_cast<double>(inElapsedSinceLastCall);
 	double currentSimTime = pluginClockSec;
+	double rawFlightTimeSec = static_cast<double>(XPLMGetDataf(XPLMFindDataRef("sim/time/total_flight_time_sec")));
+	TimestampProvider::advanceSimulationClock(static_cast<double>(inElapsedSinceLastCall), rawFlightTimeSec);
 
 	// ==================================================================================
 	// SENSOR DATA - Direct sendHILSensor() at target rate
@@ -627,13 +630,18 @@ float MyFlightLoopCallback(float inElapsedSinceLastCall, float inElapsedTimeSinc
 			sensorRateSum += actualRate;
 		}
 
-		// Log statistics every 1000 messages (~5 seconds at 200Hz)
-		if (ConfigManager::debug_log_sensor_timing && sensorMessageCount % 1000 == 0) {
+		// Compact HITL evidence for launcher diagnostics; verbose sensor values stay debug-gated.
+		if (sensorMessageCount % 1000 == 0) {
 			float avgRate = sensorRateSum / 1000.0f;
-			char buf[256];
+			XPLMDataRef frameRateRef = XPLMFindDataRef("sim/operation/misc/frame_rate_period");
+			float frameRatePeriod = frameRateRef ? XPLMGetDataf(frameRateRef) : 0.0f;
+			float estimatedFps = (frameRatePeriod > 0.0f) ? (1.0f / frameRatePeriod) : 0.0f;
+			XPLMDataRef pausedRef = XPLMFindDataRef("sim/time/paused");
+			int paused = pausedRef ? XPLMGetDatai(pausedRef) : -1;
+			char buf[320];
 			snprintf(buf, sizeof(buf),
-				"px4xplane: [%.1fs] HIL_SENSOR: %d msgs, avg %.1f Hz (target %d Hz)\n",
-				currentSimTime, sensorMessageCount, avgRate, ConfigManager::mavlink_sensor_rate_hz);
+				"px4xplane: [RATE] sim_time=%.1fs HIL_SENSOR msgs=%d avg=%.1fHz target=%dHz estimated_fps=%.1f paused=%d\n",
+				currentSimTime, sensorMessageCount, avgRate, ConfigManager::mavlink_sensor_rate_hz, estimatedFps, paused);
 			XPLMDebugString(buf);
 			sensorRateSum = 0.0f;
 		}

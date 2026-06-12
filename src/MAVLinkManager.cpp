@@ -70,11 +70,6 @@ std::normal_distribution<float> MAVLinkManager::noiseDistribution_gyro(0.0f, 0.0
 // Critical for EKF2's IMU bias estimator to have realistic signal to converge on
 std::normal_distribution<float> MAVLinkManager::noiseDistribution_accel_bias(0.0f, 0.0001f);
 
-// Phase 2 Fix: Timestamp jitter model (IMU sample clock variation)
-// Gaussian jitter: σ = 200μs - simulates real IMU sample timing variance
-// Breaks perfect frame-synchronous timing to create realistic sensor asynchrony
-std::normal_distribution<float> MAVLinkManager::noiseDistribution_timestamp_jitter(0.0f, 200.0f);
-
 //------------------------------------------------------------------------------
 // setAccelerationData()
 // Uses computeAcceleration() to update the HIL_SENSOR acceleration data.
@@ -381,50 +376,21 @@ void MAVLinkManager::sendHILSensor(uint8_t sensor_id = 0) {
 
 	if (!ConnectionManager::isConnected()) return;
 
-	static uint64_t lastSensorTime = 0;
 	static int sensorCount = 0;
-
-	// Phase 2 Fix: Per-sensor timestamp offset (persistent across calls)
-	// Each sensor instance gets unique jitter to simulate real IMU clock drift
-	static int64_t sensor_timestamp_offset[2] = {0, 0};  // Support up to 2 sensors
-	static bool offset_initialized = false;
 
 	// CRITICAL BUG FIX (January 2025): Reset timing state on reconnection
 	// This prevents timestamp jumps that cause PX4 lockstep_scheduler to hang
 	static uint32_t localResetGeneration = 0;
 	if (localResetGeneration != g_sessionResetGeneration) {
-		lastSensorTime = 0;
 		sensorCount = 0;
-		sensor_timestamp_offset[0] = 0;
-		sensor_timestamp_offset[1] = 0;
-		offset_initialized = false;
 		localResetGeneration = g_sessionResetGeneration;
-	}
-
-	// Initialize persistent timestamp offsets once at startup
-	if (!offset_initialized) {
-		sensor_timestamp_offset[0] = static_cast<int64_t>(noiseDistribution_timestamp_jitter(gen));
-		sensor_timestamp_offset[1] = static_cast<int64_t>(noiseDistribution_timestamp_jitter(gen));
-		offset_initialized = true;
 	}
 
 	mavlink_message_t msg;
 	mavlink_hil_sensor_t hil_sensor = {};  // Zero-initialize to prevent garbage values
 
-	// Get high-precision timestamp using delta-based accumulation
-	// This fixes the float precision loss that caused EKF2 time_slip errors
-	// (X-Plane's float total_flight_time_sec loses precision after ~16.7 seconds)
-	uint64_t base_time_usec = TimestampProvider::getTimestampUsec();
-
-	// Add small jitter to simulate real IMU sample clock variation (±200μs)
-	uint8_t sensor_idx = (sensor_id <= 1) ? sensor_id : 0;
-	int64_t jitter_usec = static_cast<int64_t>(noiseDistribution_timestamp_jitter(gen));
-	hil_sensor.time_usec = base_time_usec + sensor_timestamp_offset[sensor_idx] + jitter_usec;
-
-	// Ensure timestamp is still monotonically increasing (safety check)
-	if (hil_sensor.time_usec <= lastSensorTime) {
-		hil_sensor.time_usec = lastSensorTime + 1;
-	}
+	hil_sensor.time_usec = TimestampProvider::getTimestampUsec();
+	TimestampProvider::noteMessageTimestamp(TimestampProvider::MessageKind::HIL_SENSOR, hil_sensor.time_usec);
 
 	hil_sensor.id = uint8_t(sensor_id);
 
@@ -454,8 +420,58 @@ void MAVLinkManager::sendHILSensor(uint8_t sensor_id = 0) {
 
 	// Smart detailed sensor logging: Only every 10,000 samples (~100s @ 100Hz) when debug enabled
 	sensorCount++;
+	if (sensorCount % 1000 == 0) {
+		const auto diagnostics = TimestampProvider::getDiagnostics();
+		const auto& sensorStats = diagnostics.message_stats[static_cast<size_t>(TimestampProvider::MessageKind::HIL_SENSOR)];
+		const auto& gpsStats = diagnostics.message_stats[static_cast<size_t>(TimestampProvider::MessageKind::HIL_GPS)];
+		const char* branchName =
+			(diagnostics.last_branch == TimestampProvider::AdvanceBranch::MAX_DELTA_CAP) ? "max-delta-cap" :
+			(diagnostics.last_branch == TimestampProvider::AdvanceBranch::NORMAL_DELTA) ? "normal-delta" :
+			"sub-frame/min-delta";
+		char buf[1024];
+		snprintf(buf, sizeof(buf),
+			"px4xplane: [TIMESTAMP_SUMMARY] branch=%s raw_flight=%.6f callback_delta=%.6f step_clock=%.6f drift_ms=%.3f capped=%llu "
+			"HIL_SENSOR samples=%llu last_dt=%llu min=%llu max=%llu mean=%.1f lt1000=%llu hist_us=<1:%llu,1-5:%llu,5-15:%llu,15-25:%llu,25-35:%llu,35-45:%llu,45-60:%llu,60-100:%llu,>100:%llu> "
+			"HIL_GPS samples=%llu last_dt=%llu min=%llu max=%llu mean=%.1f lt1000=%llu hist_us=<1:%llu,1-5:%llu,5-15:%llu,15-25:%llu,25-35:%llu,35-45:%llu,45-60:%llu,60-100:%llu,>100:%llu>\n",
+			branchName,
+			diagnostics.raw_total_flight_time_sec,
+			diagnostics.computed_delta_sec,
+			diagnostics.simulation_clock_usec / 1e6,
+			diagnostics.drift_usec / 1000.0,
+			(unsigned long long)diagnostics.capped_large_delta_count,
+			(unsigned long long)sensorStats.sample_count,
+			(unsigned long long)sensorStats.last_delta_usec,
+			(unsigned long long)sensorStats.min_delta_usec,
+			(unsigned long long)sensorStats.max_delta_usec,
+			sensorStats.mean_delta_usec,
+			(unsigned long long)sensorStats.under_1000_usec_count,
+			(unsigned long long)sensorStats.hist_under_1000_usec,
+			(unsigned long long)sensorStats.hist_1000_to_5000_usec,
+			(unsigned long long)sensorStats.hist_5000_to_15000_usec,
+			(unsigned long long)sensorStats.hist_15000_to_25000_usec,
+			(unsigned long long)sensorStats.hist_25000_to_35000_usec,
+			(unsigned long long)sensorStats.hist_35000_to_45000_usec,
+			(unsigned long long)sensorStats.hist_45000_to_60000_usec,
+			(unsigned long long)sensorStats.hist_60000_to_100000_usec,
+			(unsigned long long)sensorStats.hist_over_100000_usec,
+			(unsigned long long)gpsStats.sample_count,
+			(unsigned long long)gpsStats.last_delta_usec,
+			(unsigned long long)gpsStats.min_delta_usec,
+			(unsigned long long)gpsStats.max_delta_usec,
+			gpsStats.mean_delta_usec,
+			(unsigned long long)gpsStats.under_1000_usec_count,
+			(unsigned long long)gpsStats.hist_under_1000_usec,
+			(unsigned long long)gpsStats.hist_1000_to_5000_usec,
+			(unsigned long long)gpsStats.hist_5000_to_15000_usec,
+			(unsigned long long)gpsStats.hist_15000_to_25000_usec,
+			(unsigned long long)gpsStats.hist_25000_to_35000_usec,
+			(unsigned long long)gpsStats.hist_35000_to_45000_usec,
+			(unsigned long long)gpsStats.hist_45000_to_60000_usec,
+			(unsigned long long)gpsStats.hist_60000_to_100000_usec,
+			(unsigned long long)gpsStats.hist_over_100000_usec);
+		XPLMDebugString(buf);
+	}
 	if (ConfigManager::debug_log_sensor_timing && (sensorCount % 10000 == 0)) {
-		uint64_t timeDelta = (lastSensorTime > 0) ? (hil_sensor.time_usec - lastSensorTime) : 0;
 		char buf[512];
 		snprintf(buf, sizeof(buf),
 			"px4xplane: [SENSOR_DETAIL #%d] ACC[%.2f,%.2f,%.2f] GYRO[%.3f,%.3f,%.3f] BARO=%.1fhPa MAG[%.2f,%.2f,%.2f]\n",
@@ -464,8 +480,6 @@ void MAVLinkManager::sendHILSensor(uint8_t sensor_id = 0) {
 			hil_sensor.abs_pressure, hil_sensor.xmag, hil_sensor.ymag, hil_sensor.zmag);
 		XPLMDebugString(buf);
 	}
-	lastSensorTime = hil_sensor.time_usec;
-
 	// Debug first message send to verify connection
 	if (sensorCount == 1 && ConfigManager::debug_log_sensor_timing) {
 		char buf[256];
@@ -556,8 +570,8 @@ void MAVLinkManager::sendHILGPS() {
 
 	// Use high-precision timestamp (fixes EKF2 time_slip from float precision loss)
 	hil_gps.time_usec = TimestampProvider::getTimestampUsec();
-
-	lastGPSTime = hil_gps.time_usec;
+	uint64_t gpsTimeDelta = (lastGPSTime > 0) ? (hil_gps.time_usec - lastGPSTime) : 0;
+	TimestampProvider::noteMessageTimestamp(TimestampProvider::MessageKind::HIL_GPS, hil_gps.time_usec);
 
 	// Set various GPS data components
 	setGPSTimeAndFix(hil_gps);
@@ -572,7 +586,6 @@ void MAVLinkManager::sendHILGPS() {
 
 	// Debug logging for GPS timing and complete message content
 	if (ConfigManager::debug_log_sensor_timing && gpsCount++ % 20 == 0) {
-		uint64_t timeDelta = (lastGPSTime > 0) ? (hil_gps.time_usec - lastGPSTime) : 0;
 		char buf[512];
 		snprintf(buf, sizeof(buf),
 			"px4xplane: [HIL_GPS #%d] time=%llu us, dt=%.3f ms, rate=%.1f Hz\n"
@@ -580,14 +593,15 @@ void MAVLinkManager::sendHILGPS() {
 			"  ACC: eph=%ucm, epv=%ucm, sats=%u, fix=%u\n"
 			"  VEL: vn=%dcm/s, ve=%dcm/s, vd=%dcm/s, vel=%ucm/s\n"
 			"  HDG: cog=%u (%.2f°), yaw=%u (%.2f°), id=%u\n",
-			gpsCount, (unsigned long long)hil_gps.time_usec, timeDelta / 1000.0,
-			(timeDelta > 0) ? (1000000.0 / timeDelta) : 0.0,
+			gpsCount, (unsigned long long)hil_gps.time_usec, gpsTimeDelta / 1000.0,
+			(gpsTimeDelta > 0) ? (1000000.0 / gpsTimeDelta) : 0.0,
 			hil_gps.lat, hil_gps.lat / 1e7, hil_gps.lon, hil_gps.lon / 1e7, hil_gps.alt,
 			hil_gps.eph, hil_gps.epv, hil_gps.satellites_visible, hil_gps.fix_type,
 			hil_gps.vn, hil_gps.ve, hil_gps.vd, hil_gps.vel,
 			hil_gps.cog, hil_gps.cog / 100.0, hil_gps.yaw, hil_gps.yaw / 100.0, hil_gps.id);
 		XPLMDebugString(buf);
 	}
+	lastGPSTime = hil_gps.time_usec;
 
 	// Encode and send the MAVLink message
 	mavlink_msg_hil_gps_encode(1, 1, &msg, &hil_gps);
@@ -663,6 +677,7 @@ void MAVLinkManager::sendHILStateQuaternion() {
 	mavlink_hil_state_quaternion_t hil_state = {};
 
 	populateHILStateQuaternion(hil_state);
+	TimestampProvider::noteMessageTimestamp(TimestampProvider::MessageKind::HIL_STATE_QUATERNION, hil_state.time_usec);
 
 	// Debug logging for state quaternion (every 100 messages)
 	if (ConfigManager::debug_log_sensor_timing && stateQuatCount++ % 100 == 0) {
@@ -804,6 +819,7 @@ void MAVLinkManager::sendHILRCInputs() {
 
 	// Use high-precision timestamp (fixes EKF2 time_slip from float precision loss)
 	hil_rc_inputs.time_usec = TimestampProvider::getTimestampUsec();
+	TimestampProvider::noteMessageTimestamp(TimestampProvider::MessageKind::HIL_RC_INPUTS, hil_rc_inputs.time_usec);
 
 	// Map RC channels using joystick data from X-Plane
 	hil_rc_inputs.chan1_raw = mapRCChannel(DataRefManager::getFloat("sim/joystick/yoke_roll_ratio"), -1, +1);
