@@ -42,7 +42,6 @@ private:
     static std::normal_distribution<float> noiseDistribution_gyro;              // Phase 1: Gyro noise
     // REMOVED: noiseDistribution_gps_alt - now created fresh in sendHILGPS() for true Gaussian behavior
     static std::normal_distribution<float> noiseDistribution_accel_bias;        // Phase 2: Accel bias drift
-    static std::normal_distribution<float> noiseDistribution_timestamp_jitter;  // Phase 2: Timestamp jitter
     static std::normal_distribution<float> highFreqNoise;
     static std::normal_distribution<float> lowFreqNoise;
     static void setGPSTimeAndFix(mavlink_hil_gps_t& hil_gps);

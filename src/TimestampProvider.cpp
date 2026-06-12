@@ -1,167 +1,182 @@
 /**
  * @file TimestampProvider.cpp
- * @brief High-precision timestamp generation for PX4 HIL messages.
- *
- * Fixes EKF2 time_slip issues caused by float precision loss when converting
- * X-Plane's total_flight_time_sec (32-bit float) to microseconds.
- *
- * @see TimestampProvider.h for detailed documentation
+ * @brief Session-scoped simulation-step timestamp generation for PX4 HIL messages.
  */
 
 #include "TimestampProvider.h"
-#include "DataRefManager.h"
 #include "ConfigManager.h"
 #include "XPLMUtilities.h"
-#include <cstdio>
-#include <cmath>
 
-// Static member initialization
+#include <cmath>
+#include <cstdio>
+
 bool TimestampProvider::s_initialized = false;
+bool TimestampProvider::s_hasAdvancedThisSession = false;
 TimestampProvider::TimePoint TimestampProvider::s_baseTimePoint;
-double TimestampProvider::s_lastXPlaneTimeSec = 0.0;
-uint64_t TimestampProvider::s_accumulatedDeltaUsec = 0;
-uint64_t TimestampProvider::s_lastOutputUsec = 0;
-int64_t TimestampProvider::s_driftUsec = 0;
-uint64_t TimestampProvider::s_lastDeltaUsec = 0;
+uint64_t TimestampProvider::s_simulationClockUsec = TimestampProvider::BASE_OFFSET_USEC;
+TimestampProvider::Diagnostics TimestampProvider::s_diagnostics;
+
+void TimestampProvider::initializeIfNeeded() {
+    if (s_initialized) {
+        return;
+    }
+
+    s_baseTimePoint = SteadyClock::now();
+    s_simulationClockUsec = BASE_OFFSET_USEC;
+    resetDiagnostics();
+    s_initialized = true;
+
+    if (ConfigManager::debug_log_sensor_timing) {
+        char buf[256];
+        snprintf(buf, sizeof(buf),
+            "px4xplane: [TIMESTAMP] Simulation-step clock initialized, base=%llu us\n",
+            (unsigned long long)s_simulationClockUsec);
+        XPLMDebugString(buf);
+    }
+}
+
+void TimestampProvider::advanceSimulationClock(double elapsed_since_last_call_sec,
+                                               double raw_total_flight_time_sec) {
+    initializeIfNeeded();
+
+    s_diagnostics.raw_total_flight_time_sec = raw_total_flight_time_sec;
+    s_diagnostics.computed_delta_sec = elapsed_since_last_call_sec;
+
+    if (!s_hasAdvancedThisSession) {
+        s_hasAdvancedThisSession = true;
+        s_diagnostics.last_branch = AdvanceBranch::SUB_FRAME_OR_ZERO_DELTA;
+        s_diagnostics.sub_frame_branch_count++;
+        s_diagnostics.last_delta_usec = 0;
+        s_diagnostics.simulation_clock_usec = s_simulationClockUsec;
+        s_diagnostics.drift_usec = 0;
+        return;
+    }
+
+    uint64_t deltaUsec = 0;
+    if (elapsed_since_last_call_sec <= 0.0 || !std::isfinite(elapsed_since_last_call_sec)) {
+        s_diagnostics.last_branch = AdvanceBranch::SUB_FRAME_OR_ZERO_DELTA;
+        s_diagnostics.sub_frame_branch_count++;
+    } else {
+        double cappedDeltaSec = elapsed_since_last_call_sec;
+        if (cappedDeltaSec > static_cast<double>(MAX_DELTA_USEC) / 1e6) {
+            cappedDeltaSec = static_cast<double>(MAX_DELTA_USEC) / 1e6;
+            s_diagnostics.last_branch = AdvanceBranch::MAX_DELTA_CAP;
+            s_diagnostics.max_delta_cap_branch_count++;
+            s_diagnostics.capped_large_delta_count++;
+        } else {
+            s_diagnostics.last_branch = AdvanceBranch::NORMAL_DELTA;
+            s_diagnostics.normal_delta_branch_count++;
+        }
+        deltaUsec = static_cast<uint64_t>(std::llround(cappedDeltaSec * 1e6));
+    }
+
+    s_simulationClockUsec += deltaUsec;
+    s_diagnostics.simulation_clock_usec = s_simulationClockUsec;
+    s_diagnostics.last_delta_usec = deltaUsec;
+    s_diagnostics.drift_usec = 0;
+
+    if (ConfigManager::debug_log_sensor_timing) {
+        static uint64_t lastLogUsec = 0;
+        if (s_simulationClockUsec == BASE_OFFSET_USEC ||
+            s_simulationClockUsec - lastLogUsec >= 10000000 ||
+            s_diagnostics.last_branch == AdvanceBranch::MAX_DELTA_CAP) {
+            const char* branchName =
+                (s_diagnostics.last_branch == AdvanceBranch::MAX_DELTA_CAP) ? "max-delta-cap" :
+                (s_diagnostics.last_branch == AdvanceBranch::NORMAL_DELTA) ? "normal-delta" :
+                "sub-frame/min-delta";
+            char buf[384];
+            snprintf(buf, sizeof(buf),
+                "px4xplane: [TIMESTAMP] branch=%s raw_flight=%.6f delta=%.6f sec step_clock=%.6f sec last_dt=%llu us capped=%llu drift=%+.3f ms\n",
+                branchName,
+                s_diagnostics.raw_total_flight_time_sec,
+                s_diagnostics.computed_delta_sec,
+                s_diagnostics.simulation_clock_usec / 1e6,
+                (unsigned long long)s_diagnostics.last_delta_usec,
+                (unsigned long long)s_diagnostics.capped_large_delta_count,
+                s_diagnostics.drift_usec / 1000.0);
+            XPLMDebugString(buf);
+            lastLogUsec = s_simulationClockUsec;
+        }
+    }
+}
 
 uint64_t TimestampProvider::getTimestampUsec() {
-    // Get current X-Plane simulation time
-    // NOTE: This is a float dataref, but we only use it for DELTA calculation.
-    // Small deltas (frame-to-frame) preserve float precision even at large absolute values.
-    double currentXPlaneTimeSec = static_cast<double>(
-        DataRefManager::getFloat("sim/time/total_flight_time_sec")
-    );
+    initializeIfNeeded();
+    return s_simulationClockUsec;
+}
 
-    // First call initialization
-    if (!s_initialized) {
-        s_baseTimePoint = SteadyClock::now();
-        s_lastXPlaneTimeSec = currentXPlaneTimeSec;
+void TimestampProvider::noteMessageTimestamp(MessageKind kind, uint64_t timestamp_usec) {
+    initializeIfNeeded();
 
-        // CRITICAL: Start with non-zero timestamp (1 second = 1,000,000 usec)
-        // Returning 0 causes PX4 to see a massive backwards timestamp jump
-        // which triggers "timestamp error timestamp_sample: 0" and EKF2 failures.
-        // PX4 lockstep will sync to this starting point and increment from here.
-        s_accumulatedDeltaUsec = 1000000;  // 1 second base offset
-        s_lastOutputUsec = 1000000;
-        s_driftUsec = 0;
-        s_lastDeltaUsec = 0;
-        s_initialized = true;
+    const size_t index = static_cast<size_t>(kind);
+    if (index >= static_cast<size_t>(MessageKind::COUNT)) {
+        return;
+    }
 
-        if (ConfigManager::debug_log_sensor_timing) {
-            char buf[256];
-            snprintf(buf, sizeof(buf),
-                "px4xplane: [TIMESTAMP] TimestampProvider initialized at X-Plane time %.3f sec, base=%llu us\n",
-                currentXPlaneTimeSec, (unsigned long long)s_accumulatedDeltaUsec);
-            XPLMDebugString(buf);
+    DeltaStats& stats = s_diagnostics.message_stats[index];
+    if (stats.sample_count > 0) {
+        const uint64_t deltaUsec = (timestamp_usec >= stats.last_timestamp_usec)
+            ? (timestamp_usec - stats.last_timestamp_usec)
+            : 0;
+        stats.last_delta_usec = deltaUsec;
+        if (stats.sample_count == 1 || deltaUsec < stats.min_delta_usec) {
+            stats.min_delta_usec = deltaUsec;
         }
-
-        // Return non-zero initial timestamp
-        return s_accumulatedDeltaUsec;
-    }
-
-    // Calculate delta from last frame
-    // KEY INSIGHT: Small delta values preserve float precision!
-    // At 100 FPS, delta is ~0.01 seconds = 10,000 microseconds (5 digits, well within float precision)
-    double deltaSec = currentXPlaneTimeSec - s_lastXPlaneTimeSec;
-
-    // Handle time going backwards (simulation restart, scenario change)
-    if (deltaSec < 0) {
-        if (ConfigManager::debug_log_sensor_timing) {
-            char buf[256];
-            snprintf(buf, sizeof(buf),
-                "px4xplane: [TIMESTAMP] Time went backwards (delta=%.6f sec), resetting\n",
-                deltaSec);
-            XPLMDebugString(buf);
+        if (deltaUsec > stats.max_delta_usec) {
+            stats.max_delta_usec = deltaUsec;
         }
-        // Reset and recurse - will return 0 and start fresh
-        reset();
-        return getTimestampUsec();
-    }
-
-    // Handle pause or large frame skip
-    // Cap to MAX_DELTA_SEC to prevent timestamp jumps that confuse EKF2
-    if (deltaSec > MAX_DELTA_SEC) {
-        if (ConfigManager::debug_log_sensor_timing) {
-            char buf[256];
-            snprintf(buf, sizeof(buf),
-                "px4xplane: [TIMESTAMP] Large delta capped: %.3f -> %.3f sec (pause/skip detected)\n",
-                deltaSec, MAX_DELTA_SEC);
-            XPLMDebugString(buf);
+        const double count = static_cast<double>(stats.sample_count);
+        stats.mean_delta_usec += (static_cast<double>(deltaUsec) - stats.mean_delta_usec) / count;
+        if (deltaUsec < 1000) {
+            stats.under_1000_usec_count++;
         }
-        deltaSec = MAX_DELTA_SEC;
-    }
-
-    // Handle very small deltas (multiple calls within same frame)
-    // Use system clock for sub-frame microsecond precision
-    if (deltaSec < MIN_DELTA_SEC) {
-        auto now = SteadyClock::now();
-        auto systemElapsed = std::chrono::duration_cast<std::chrono::microseconds>(
-            now - s_baseTimePoint
-        ).count();
-
-        // Use system elapsed time, but ensure it's at least as large as accumulated
-        // This handles the case where we're called multiple times per frame
-        uint64_t timestamp = static_cast<uint64_t>(systemElapsed);
-
-        // Ensure monotonicity - never return a value <= last output
-        if (timestamp <= s_lastOutputUsec) {
-            timestamp = s_lastOutputUsec + 1;
-        }
-        s_lastOutputUsec = timestamp;
-
-        return timestamp;
-    }
-
-    // Normal delta processing - accumulate with full 64-bit precision
-    uint64_t deltaUsec = static_cast<uint64_t>(deltaSec * 1e6);
-    s_accumulatedDeltaUsec += deltaUsec;
-    s_lastXPlaneTimeSec = currentXPlaneTimeSec;
-    s_lastDeltaUsec = deltaUsec;
-
-    // Ensure strict monotonicity
-    if (s_accumulatedDeltaUsec <= s_lastOutputUsec) {
-        s_accumulatedDeltaUsec = s_lastOutputUsec + 1;
-    }
-    s_lastOutputUsec = s_accumulatedDeltaUsec;
-
-    // Periodic drift logging (diagnostic only - does not affect timestamps)
-    static uint64_t lastDriftLog = 0;
-    if (s_accumulatedDeltaUsec - lastDriftLog > DRIFT_LOG_INTERVAL_USEC) {
-        auto now = SteadyClock::now();
-        auto systemElapsed = std::chrono::duration_cast<std::chrono::microseconds>(
-            now - s_baseTimePoint
-        ).count();
-        s_driftUsec = static_cast<int64_t>(s_accumulatedDeltaUsec) - systemElapsed;
-        lastDriftLog = s_accumulatedDeltaUsec;
-
-        if (ConfigManager::debug_log_sensor_timing) {
-            char buf[256];
-            snprintf(buf, sizeof(buf),
-                "px4xplane: [TIMESTAMP] t=%.1fs, drift=%+.3fms, avg_delta=%.2fms\n",
-                s_accumulatedDeltaUsec / 1e6,
-                s_driftUsec / 1000.0,
-                s_lastDeltaUsec / 1000.0);
-            XPLMDebugString(buf);
+        if (deltaUsec < 1000) {
+            stats.hist_under_1000_usec++;
+        } else if (deltaUsec < 5000) {
+            stats.hist_1000_to_5000_usec++;
+        } else if (deltaUsec < 15000) {
+            stats.hist_5000_to_15000_usec++;
+        } else if (deltaUsec < 25000) {
+            stats.hist_15000_to_25000_usec++;
+        } else if (deltaUsec < 35000) {
+            stats.hist_25000_to_35000_usec++;
+        } else if (deltaUsec < 45000) {
+            stats.hist_35000_to_45000_usec++;
+        } else if (deltaUsec < 60000) {
+            stats.hist_45000_to_60000_usec++;
+        } else if (deltaUsec <= 100000) {
+            stats.hist_60000_to_100000_usec++;
+        } else {
+            stats.hist_over_100000_usec++;
         }
     }
-
-    return s_accumulatedDeltaUsec;
+    stats.last_timestamp_usec = timestamp_usec;
+    stats.sample_count++;
 }
 
 void TimestampProvider::reset() {
     s_initialized = false;
-    s_accumulatedDeltaUsec = 0;
-    s_lastOutputUsec = 0;
-    s_lastXPlaneTimeSec = 0.0;
-    s_driftUsec = 0;
-    s_lastDeltaUsec = 0;
+    s_hasAdvancedThisSession = false;
+    s_simulationClockUsec = BASE_OFFSET_USEC;
+    resetDiagnostics();
 
     if (ConfigManager::debug_log_sensor_timing) {
-        XPLMDebugString("px4xplane: [TIMESTAMP] TimestampProvider reset - next call reinitializes\n");
+        XPLMDebugString("px4xplane: [TIMESTAMP] Simulation-step clock reset - next session starts at 1000000 us\n");
     }
 }
 
 void TimestampProvider::getDiagnostics(int64_t& out_drift_usec, uint64_t& out_last_delta_usec) {
-    out_drift_usec = s_driftUsec;
-    out_last_delta_usec = s_lastDeltaUsec;
+    initializeIfNeeded();
+    out_drift_usec = s_diagnostics.drift_usec;
+    out_last_delta_usec = s_diagnostics.last_delta_usec;
+}
+
+TimestampProvider::Diagnostics TimestampProvider::getDiagnostics() {
+    initializeIfNeeded();
+    return s_diagnostics;
+}
+
+void TimestampProvider::resetDiagnostics() {
+    s_diagnostics = Diagnostics{};
+    s_diagnostics.simulation_clock_usec = s_simulationClockUsec;
 }
