@@ -1,6 +1,7 @@
 # C – Flight-loop workload audit
 
-**Scope:** Per-frame cost inventory and pacing hypothesis for `MyFlightLoopCallback`. Read-only audit; no fixes, no catch-up, no sensor/param changes. Cross-review by Claude pending.
+**Issue:** #8 · **Runner:** Kimi · **Cross-review:** Claude (complete — verdict ACCEPT-WITH-NOTES; see §"Cross-review sign-off")
+**Scope:** Per-frame cost inventory and pacing hypothesis for `MyFlightLoopCallback`. Read-only audit; no fixes, no catch-up, no sensor/param changes.
 
 ---
 
@@ -116,25 +117,23 @@ Consequences:
 
 ### Q5. Does `receiveData()` splitting MAVLink frames across callbacks cause parser state churn, dropped parsed messages, or lockstep round-trip delay?
 
-**Yes, the current parser is vulnerable to frame-splitting across callbacks.**
+**Parser-state loss is REFUTED. Frame-splitting across callbacks does NOT churn the parser or drop messages.** The surviving concern is an **undrained 255-byte single-recv backlog → lockstep round-trip latency**, not parser corruption.
 
-`MAVLinkManager::receiveHILActuatorControls` (`MAVLinkManager.cpp:877-887`) declares `mavlink_status_t status;` as a stack-local variable and zero-initializes it implicitly via value initialization every time the function is called. The parser state is only preserved **within** one `recv` buffer:
+`MAVLinkManager::receiveHILActuatorControls` (`MAVLinkManager.cpp:877-887`) does declare `mavlink_message_t msg;` and `mavlink_status_t status;` as stack locals, but those are **output parameters** of `mavlink_parse_char` — written only when a *complete* message is decoded. The actual working parser state is keyed on the **channel** `MAVLINK_COMM_0`: the MAVLink C library holds per-channel static buffers (`mavlink_get_channel_status`/`mavlink_get_channel_buffer`), so a partial frame split across two `recv` calls **is correctly resumed** on the next callback.
 
 ```cpp
 for (int i = 0; i < size; ++i) {
-    if (mavlink_parse_char(MAVLINK_COMM_0, buffer[i], &msg, &status)) {
+    if (mavlink_parse_char(MAVLINK_COMM_0, buffer[i], &msg, &status)) {  // state lives in COMM_0, not in local `status`
         handleReceivedMessage(msg);
     }
 }
 ```
 
-If a MAVLink frame is split across two flight-loop callbacks (e.g., TCP delivers 30 bytes in callback *N* and the remaining 33 bytes in callback *N+1*):
+**Decisive proof in this codebase:** `MAVLinkManager::reset()` calls `mavlink_reset_channel_status(MAVLINK_COMM_0)` (`MAVLinkManager.cpp:992`). That call only exists because channel parser state **persists across `receiveHILActuatorControls` invocations** — there would be nothing to reset if each callback started clean. So the earlier "stack-local status is re-zeroed → trailing bytes lost" reasoning is wrong: the re-declared local is irrelevant to continuity.
 
-1. **Parser state churn:** callback *N+1* starts with a zeroed `status`, so the trailing bytes from the previous frame are not resumed.
-2. **Dropped parsed messages:** the bytes already consumed in callback *N* have no durable parser context; on callback *N+1* they are gone. The trailing bytes will be parsed from a zero state and will fail until a new start-of-frame (`0xFE`/`0xFD`) is seen.
-3. **Lockstep round-trip delay:** PX4 emits one `HIL_ACTUATOR_CONTROLS` per received `HIL_SENSOR`. If that actuator message is dropped because of a split, the actuator values are not updated for that frame. The next complete frame arrives after at least one more callback, adding one callback interval (potentially ~35 ms) of control latency.
+**What actually survives as a risk (Q4 mechanism, reframed):** `receiveData` does a single `select` + single `recv` of at most 255 bytes (`ConnectionManager.cpp:837` `buffer[256]`, `:860` `sizeof(buffer)-1`) with **no drain loop**. If PX4 ever queues >255 bytes, the remainder waits in the kernel until the next flight-loop callback — adding up to one callback interval (~35 ms) of lockstep round-trip latency. Under nominal lockstep (one ~63-byte `HIL_ACTUATOR_CONTROLS` per round) 255 bytes covers several frames, so this is a **latent backlog/latency risk**, not parser corruption and not an active backlog under nominal conditions.
 
-**Mitigation note:** This review is audit-only; adding a static parser state, a larger buffer, or a drain loop is a behavioral change and is out of scope here.
+**Mitigation note:** This review is audit-only; a drain loop or larger buffer is a behavioral change and is out of scope here. (Note: adding a *static parser state* would be unnecessary as well — the channel already retains it.)
 
 ### Q6. Are actuator overrides expensive enough to explain ~35 ms frames?
 
@@ -196,7 +195,7 @@ No sensor values, noise, calibration, PX4 params, or lockstep behavior may be ch
 
 1. **Render-bound bimodal frame pacing (most likely).** `MyFlightLoopCallback` is called every X-Plane frame. X-Plane 12 on macOS commonly shows a fast-frame / slow-frame pattern from VSync, scene complexity, or window-server timing. The ~35 ms mode (~28-30 Hz) is consistent with a missed VSync or a backgrounded/disconnected session averaged into the bundle.
 2. **Per-frame string-keyed dataref lookup overhead.** Dozens of uncached `XPLMFindDataRef` calls per frame add deterministic latency. While each lookup is normally fast, on a slow or contended X-Plane/plugin path they could contribute to frame-time variance. This is a low-cost, high-confidence suspect because the lookups are provably uncached.
-3. **MAVLink frame-splitting / recv-drain behavior.** The 255-byte single-recv path with a stack-local parser state can drop or delay actuator messages and may leave bytes in the kernel. This is more likely to cause lockstep latency spikes than a 35 ms stall, but it can amplify perceived jitter.
+3. **Undrained 255-byte recv backlog (lockstep latency).** The single-`select`+single-`recv`-no-drain path can leave >255 bytes in the kernel until the next callback, adding up to one callback interval of lockstep round-trip latency. (Parser-state loss on frame-splitting is **refuted** — see Q5; channel-keyed state persists.) More likely to cause lockstep latency spikes than a 35 ms render stall, but it can amplify perceived jitter.
 4. **WMM2025 magnetic-field stall (low probability).** `GeoMag` is expensive but fires only after 100 m of movement. It could produce a one-off slow frame when it fires, but it cannot explain a recurring ~35 ms mode.
 5. **Actuator override cost (airframe-dependent, low probability).** For aircraft with many custom datarefs this could be measurable, but for the typical configs it is unlikely to be the primary 35 ms source.
 6. **Debug logging stall (conditional).** Only relevant if `debug_log_*` flags are enabled; default off.
@@ -207,7 +206,7 @@ No sensor values, noise, calibration, PX4 params, or lockstep behavior may be ch
 
 * [x] Every per-frame operation in `MyFlightLoopCallback` classified by cost (cached / cheap / heavy / per-frame-string-lookup / syscall / config-dependent).
 * [x] Render-bound vs. plugin-bound vs. environment-bound question answered in principle, with the exact read-only instrumentation that will decide it specified.
-* [x] recv-drain / 255-byte question resolved: buffer is 256 bytes, recv length 255, no drain loop; MAVLink frame-splitting resets parser state each callback and can drop/delay messages.
+* [x] recv-drain / 255-byte question resolved: buffer is 256 bytes, recv length 255, no drain loop. MAVLink frame-splitting does **not** churn the parser or drop messages — per-channel state persists (`mavlink_reset_channel_status(MAVLINK_COMM_0)`, `MAVLinkManager.cpp:992`). Surviving risk is undrained recv backlog → lockstep round-trip latency.
 
 ---
 
