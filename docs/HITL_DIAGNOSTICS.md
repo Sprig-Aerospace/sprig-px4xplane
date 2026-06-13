@@ -11,6 +11,7 @@ This is an evidence gate before scheduler changes. Do not use this workflow to c
 - `px4xplane` excerpts from X-Plane `Log.txt`
 - versioned `[RATE]` send-rate lines with `generation`, `wall_time_usec`, count-over-wall-time `rate_hz`, and HIL_SENSOR dt p50/p95/max buckets
 - callback/FPS timing from structured `[TRANSPORT_EVENT]` lines
+- flight-loop wall-time and section-cost summaries from versioned `[DIAG_FLIGHTLOOP]` lines with `diag_version`, `generation`, and `wall_time_usec`
 - TimestampProvider drift/delta lines with `generation`, `wall_time_usec`, and wall-clock-referenced `drift_ms` when `debug_log_sensor_timing = true`
 - transport/drop evidence including `send_backpressure`, `send_retry_limit`, `dropping this frame`, `send failure`, and `broken pipe`
 - exact PX4 commands for the operator to run and paste into the bundle notes
@@ -74,6 +75,7 @@ ekf2 status
 - X-Plane render FPS mean/min, if available
 - HIL_SENSOR count-over-wall-time rate and dt p50/p95/max buckets
 - whether X-Plane was paused, backgrounded, in menu, FPS-limited, or graphics-limited
+- whether `[DIAG_FLIGHTLOOP]` appears about every 1000 sensor frames, with `callback_dt`, `callback_wall`, `frame_rate_period`, section histograms, and slow-frame dominant-section counts
 - PX4 effective `IMU_INTEG_RATE` after clamp
 - PX4 observed rates for `vehicle_imu`, `vehicle_acceleration`, and `vehicle_angular_velocity`
 - accel and gyro validator status
@@ -85,6 +87,8 @@ ekf2 status
 ## Decision Rules
 
 - render FPS approximately callback Hz approximately HIL_SENSOR send Hz approximately PX4 IMU rate approximately 24: frame/callback-bound operation; do not assume scheduler fix first.
+- `[DIAG_FLIGHTLOOP]` slow frames track `frame_rate_period` while section wall costs stay low: likely render-bound/environment-bound rather than plugin-section-bound.
+- `[DIAG_FLIGHTLOOP]` slow frames correlate with one section's max/slow-dominant count: investigate that plugin section before changing cadence.
 - callback Hz greater than HIL_SENSOR send Hz: scheduler gating/throttle issue.
 - HIL_SENSOR send Hz greater than PX4 received Hz: transport/drop/backpressure issue.
 - `time_usec` deltas distorted or drift from callback/wall time: timestamp-clock fix must precede cadence changes.
