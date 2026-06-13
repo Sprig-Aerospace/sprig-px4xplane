@@ -11,6 +11,9 @@
 #include <fstream>
 #include <sstream>
 #include <map>
+#include <array>
+#include <chrono>
+#include <cstdint>
 #include "configReader.h"
 #include "DataRefManager.h"
 #include "ConnectionManager.h"
@@ -529,6 +532,222 @@ static uint64_t sensorRateWindowStartUsec = 0;
 
 float lastFlightTime = 0.0f;
 
+namespace {
+constexpr uint64_t kSlowFrameThresholdUsec = 25000;
+constexpr size_t kDiagSectionCount = 9;
+
+enum class FlightLoopDiagSection : size_t {
+	Connection = 0,
+	Clock = 1,
+	HILSensor = 2,
+	HILGPS = 3,
+	HILState = 4,
+	HILRC = 5,
+	Receive = 6,
+	Override = 7,
+	WMM = 8,
+};
+
+const char* sectionName(FlightLoopDiagSection section) {
+	switch (section) {
+	case FlightLoopDiagSection::Connection: return "connection";
+	case FlightLoopDiagSection::Clock: return "clock";
+	case FlightLoopDiagSection::HILSensor: return "hil_sensor";
+	case FlightLoopDiagSection::HILGPS: return "hil_gps";
+	case FlightLoopDiagSection::HILState: return "hil_state";
+	case FlightLoopDiagSection::HILRC: return "hil_rc";
+	case FlightLoopDiagSection::Receive: return "receive";
+	case FlightLoopDiagSection::Override: return "override";
+	case FlightLoopDiagSection::WMM: return "wmm";
+	default: return "unknown";
+	}
+}
+
+uint64_t steadyNowUsec() {
+	const auto now = std::chrono::steady_clock::now().time_since_epoch();
+	return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(now).count());
+}
+
+// Diagnostic-only dataref handles, resolved once and reused. These are scoped to
+// the flight-loop instrumentation; this is NOT a general dataref cache.
+XPLMDataRef diagFrameRatePeriodRef() {
+	static XPLMDataRef ref = XPLMFindDataRef("sim/operation/misc/frame_rate_period");
+	return ref;
+}
+
+XPLMDataRef diagPausedRef() {
+	static XPLMDataRef ref = XPLMFindDataRef("sim/time/paused");
+	return ref;
+}
+
+XPLMDataRef diagFlightTimeRef() {
+	static XPLMDataRef ref = XPLMFindDataRef("sim/time/total_flight_time_sec");
+	return ref;
+}
+
+size_t histogramBucket(uint64_t usec) {
+	if (usec < 1000) return 0;
+	if (usec < 5000) return 1;
+	if (usec < 15000) return 2;
+	if (usec < 25000) return 3;
+	if (usec < 35000) return 4;
+	if (usec < 45000) return 5;
+	if (usec < 60000) return 6;
+	if (usec < 100000) return 7;
+	return 8;
+}
+
+struct TimingHistogram {
+	uint64_t samples = 0;
+	uint64_t totalUsec = 0;
+	uint64_t maxUsec = 0;
+	std::array<uint64_t, 9> buckets{};
+
+	void reset() {
+		samples = 0;
+		totalUsec = 0;
+		maxUsec = 0;
+		buckets.fill(0);
+	}
+
+	void add(uint64_t usec) {
+		samples++;
+		totalUsec += usec;
+		maxUsec = std::max(maxUsec, usec);
+		buckets[histogramBucket(usec)]++;
+	}
+
+	double meanUsec() const {
+		return samples > 0 ? static_cast<double>(totalUsec) / static_cast<double>(samples) : 0.0;
+	}
+};
+
+struct FlightLoopDiagnostics {
+	uint64_t resetWallUsec = 0;
+	uint64_t callbackCount = 0;
+	TimingHistogram callbackDt;
+	TimingHistogram totalCallbackWall;
+	std::array<TimingHistogram, kDiagSectionCount> sections;
+	uint64_t slowFrameCount = 0;
+	std::array<uint64_t, kDiagSectionCount> slowDominantSections{};
+	// Concurrent render frame_rate_period (as usec) sampled per slow frame, so a
+	// slow frame can be attributed render-bound (high concurrent period) vs
+	// section-bound (low concurrent period while a section dominates).
+	TimingHistogram slowFrameRatePeriodUsec;
+	float lastFrameRatePeriod = 0.0f;
+	float maxFrameRatePeriod = 0.0f;
+	int lastPaused = -1;
+
+	void reset() {
+		resetWallUsec = TimeManager::getCurrentTimeUsec();
+		callbackCount = 0;
+		callbackDt.reset();
+		totalCallbackWall.reset();
+		for (auto& section : sections) {
+			section.reset();
+		}
+		slowFrameCount = 0;
+		slowDominantSections.fill(0);
+		slowFrameRatePeriodUsec.reset();
+		lastFrameRatePeriod = 0.0f;
+		maxFrameRatePeriod = 0.0f;
+		lastPaused = -1;
+	}
+};
+
+FlightLoopDiagnostics g_flightLoopDiagnostics;
+
+void resetFlightLoopDiagnostics() {
+	g_flightLoopDiagnostics.reset();
+}
+
+void noteFlightLoopSection(FlightLoopDiagSection section, uint64_t usec) {
+	g_flightLoopDiagnostics.sections[static_cast<size_t>(section)].add(usec);
+}
+
+void noteWmmCostIfPresent() {
+	const uint64_t wmmCostUsec = DataRefManager::consumeLastMagUpdateCostUsec();
+	if (wmmCostUsec > 0) {
+		noteFlightLoopSection(FlightLoopDiagSection::WMM, wmmCostUsec);
+	}
+}
+
+FlightLoopDiagSection dominantSection(const std::array<uint64_t, kDiagSectionCount>& elapsed) {
+	size_t bestIndex = 0;
+	for (size_t i = 1; i < elapsed.size(); ++i) {
+		if (elapsed[i] > elapsed[bestIndex]) {
+			bestIndex = i;
+		}
+	}
+	return static_cast<FlightLoopDiagSection>(bestIndex);
+}
+
+void emitHistogramLine(const char* label, const TimingHistogram& hist, uint64_t slowDominantCount) {
+	char buf[768];
+	snprintf(
+		buf,
+		sizeof(buf),
+		"px4xplane: [DIAG_FLIGHTLOOP] section=%s samples=%llu mean_usec=%.1f max_usec=%llu hist_us=<1:%llu,1-5:%llu,5-15:%llu,15-25:%llu,25-35:%llu,35-45:%llu,45-60:%llu,60-100:%llu,>100:%llu> slow_dominant=%llu\n",
+		label,
+		static_cast<unsigned long long>(hist.samples),
+		hist.meanUsec(),
+		static_cast<unsigned long long>(hist.maxUsec),
+		static_cast<unsigned long long>(hist.buckets[0]),
+		static_cast<unsigned long long>(hist.buckets[1]),
+		static_cast<unsigned long long>(hist.buckets[2]),
+		static_cast<unsigned long long>(hist.buckets[3]),
+		static_cast<unsigned long long>(hist.buckets[4]),
+		static_cast<unsigned long long>(hist.buckets[5]),
+		static_cast<unsigned long long>(hist.buckets[6]),
+		static_cast<unsigned long long>(hist.buckets[7]),
+		static_cast<unsigned long long>(hist.buckets[8]),
+		static_cast<unsigned long long>(slowDominantCount));
+	XPLMDebugString(buf);
+}
+
+void emitFlightLoopDiagnostics(double currentSimTime) {
+	char buf[768];
+	const uint64_t wallNowUsec = TimeManager::getCurrentTimeUsec();
+	const uint64_t wallElapsedUsec =
+		g_flightLoopDiagnostics.resetWallUsec > 0 ? wallNowUsec - g_flightLoopDiagnostics.resetWallUsec : 0;
+	const double callbacksPerWallSec =
+		wallElapsedUsec > 0
+			? static_cast<double>(g_flightLoopDiagnostics.callbackCount) / (static_cast<double>(wallElapsedUsec) / 1000000.0)
+			: 0.0;
+
+	snprintf(
+		buf,
+		sizeof(buf),
+		"px4xplane: [DIAG_FLIGHTLOOP] diag_version=1 generation=%u wall_time_usec=%llu sim_time=%.1fs callbacks=%llu callbacks_per_wall_sec=%.2f frame_rate_period_usec=%.0f frame_rate_period_max_usec=%.0f paused=%d slow_frames=%llu\n",
+		MAVLinkManager::getSessionResetGeneration(),
+		static_cast<unsigned long long>(wallNowUsec),
+		currentSimTime,
+		static_cast<unsigned long long>(g_flightLoopDiagnostics.callbackCount),
+		callbacksPerWallSec,
+		static_cast<double>(g_flightLoopDiagnostics.lastFrameRatePeriod * 1000000.0f),
+		static_cast<double>(g_flightLoopDiagnostics.maxFrameRatePeriod * 1000000.0f),
+		g_flightLoopDiagnostics.lastPaused,
+		static_cast<unsigned long long>(g_flightLoopDiagnostics.slowFrameCount));
+	XPLMDebugString(buf);
+
+	emitHistogramLine("callback_dt", g_flightLoopDiagnostics.callbackDt, 0);
+	emitHistogramLine("callback_wall", g_flightLoopDiagnostics.totalCallbackWall, 0);
+	for (size_t i = 0; i < kDiagSectionCount; ++i) {
+		emitHistogramLine(
+			sectionName(static_cast<FlightLoopDiagSection>(i)),
+			g_flightLoopDiagnostics.sections[i],
+			g_flightLoopDiagnostics.slowDominantSections[i]);
+	}
+
+	// Per-slow-frame concurrent render frame_rate_period distribution. High
+	// mean/max here while section costs stay low implies render-bound slow
+	// frames; low values while a section dominates implies section-bound.
+	emitHistogramLine("slow_frame_rate_period", g_flightLoopDiagnostics.slowFrameRatePeriodUsec, 0);
+
+	g_flightLoopDiagnostics.reset();
+}
+}
+
 // Implementation of resetFlightLoopTimers (declared earlier, defined here after statics)
 void resetFlightLoopTimers() {
 	pluginClockSec = 0.0;
@@ -540,13 +759,60 @@ void resetFlightLoopTimers() {
 	sensorMessageCount = 0;
 	sensorRateWindowCount = 0;
 	sensorRateWindowStartUsec = TimeManager::getCurrentTimeUsec();
+	resetFlightLoopDiagnostics();
 	XPLMDebugString("px4xplane: Flight loop timers reset; next PX4 session will send frames immediately\n");
 }
 
 float MyFlightLoopCallback(float inElapsedSinceLastCall, float inElapsedTimeSinceLastFlightLoop, int inCounter, void* inRefcon) {
+	if (g_flightLoopDiagnostics.resetWallUsec == 0) {
+		resetFlightLoopDiagnostics();
+	}
+	const uint64_t callbackStartUsec = steadyNowUsec();
+	std::array<uint64_t, kDiagSectionCount> sectionElapsed{};
+	bool emitDiagFlightLoop = false;
+
+	auto recordSection = [&](FlightLoopDiagSection section, uint64_t startUsec) {
+		const uint64_t elapsedUsec = steadyNowUsec() - startUsec;
+		const size_t index = static_cast<size_t>(section);
+		sectionElapsed[index] += elapsedUsec;
+		noteFlightLoopSection(section, elapsedUsec);
+	};
+
+	auto finishCallback = [&]() -> float {
+		g_flightLoopDiagnostics.totalCallbackWall.add(steadyNowUsec() - callbackStartUsec);
+		if (inElapsedSinceLastCall > 0.0f) {
+			const uint64_t callbackDtUsec = static_cast<uint64_t>(inElapsedSinceLastCall * 1000000.0f);
+			if (callbackDtUsec > kSlowFrameThresholdUsec) {
+				const FlightLoopDiagSection dominant = dominantSection(sectionElapsed);
+				g_flightLoopDiagnostics.slowFrameCount++;
+				g_flightLoopDiagnostics.slowDominantSections[static_cast<size_t>(dominant)]++;
+				// Record the concurrent render frame_rate_period for THIS slow frame so
+				// it can be attributed render-bound vs section-bound (repair #3).
+				const uint64_t concurrentRatePeriodUsec = g_flightLoopDiagnostics.lastFrameRatePeriod > 0.0f
+					? static_cast<uint64_t>(g_flightLoopDiagnostics.lastFrameRatePeriod * 1000000.0f)
+					: 0;
+				g_flightLoopDiagnostics.slowFrameRatePeriodUsec.add(concurrentRatePeriodUsec);
+			}
+		}
+		return -1.0f;
+	};
+
+	g_flightLoopDiagnostics.callbackCount++;
+	if (inElapsedSinceLastCall > 0.0f) {
+		g_flightLoopDiagnostics.callbackDt.add(static_cast<uint64_t>(inElapsedSinceLastCall * 1000000.0f));
+	}
+
+	XPLMDataRef frameRateRef = diagFrameRatePeriodRef();
+	g_flightLoopDiagnostics.lastFrameRatePeriod = frameRateRef ? XPLMGetDataf(frameRateRef) : 0.0f;
+	g_flightLoopDiagnostics.maxFrameRatePeriod =
+		std::max(g_flightLoopDiagnostics.maxFrameRatePeriod, g_flightLoopDiagnostics.lastFrameRatePeriod);
+	XPLMDataRef pausedRef = diagPausedRef();
+	g_flightLoopDiagnostics.lastPaused = pausedRef ? XPLMGetDatai(pausedRef) : -1;
+
 	// CRITICAL FIX (January 2025): Non-blocking connection polling while waiting indefinitely
 	// Poll for incoming PX4 connection if socket is waiting
 	static float waitStartTime = 0.0f;
+	uint64_t sectionStartUsec = steadyNowUsec();
 	ConnectionManager::noteFlightLoopTiming(
 		inElapsedSinceLastCall,
 		inElapsedTimeSinceLastFlightLoop,
@@ -575,7 +841,8 @@ float MyFlightLoopCallback(float inElapsedSinceLastCall, float inElapsedTimeSinc
 
 		// If still waiting, return and try next frame
 		if (!ConnectionManager::isConnected()) {
-			return -1.0f;
+			recordSection(FlightLoopDiagSection::Connection, sectionStartUsec);
+			return finishCallback();
 		}
 
 		// Connection succeeded - reset wait timer and update HUD
@@ -592,17 +859,21 @@ float MyFlightLoopCallback(float inElapsedSinceLastCall, float inElapsedTimeSinc
 			ConnectionStatusHUD::updateStatus(ConnectionStatusHUD::Status::DISCONNECTED);
 		}
 	}
+	recordSection(FlightLoopDiagSection::Connection, sectionStartUsec);
 
 	// Ensure we're connected before proceeding with sensor data
-	if (!ConnectionManager::isConnected()) return -1.0f;
+	if (!ConnectionManager::isConnected()) return finishCallback();
 
+	sectionStartUsec = steadyNowUsec();
 	// Accept a newer PX4 client if one appears while the old client is still present.
 	// This prevents stale accepted sockets from owning the HIL lane across PX4 restarts.
 	ConnectionManager::tryAcceptConnection();
 
 	// Notify HUD that we're actively connected (for FPS monitoring)
 	ConnectionStatusHUD::notifyConnected();
+	recordSection(FlightLoopDiagSection::Connection, sectionStartUsec);
 
+	sectionStartUsec = steadyNowUsec();
 	// Plugin-local monotonic clock, double precision, accumulated from
 	// inElapsedSinceLastCall (X-Plane's per-callback wall-time delta in seconds).
 	// We previously read sim/time/total_*_sec datarefs and used static float
@@ -613,8 +884,10 @@ float MyFlightLoopCallback(float inElapsedSinceLastCall, float inElapsedTimeSinc
 	// sidesteps that entirely and is the canonical X-Plane SDK pattern.
 	pluginClockSec += static_cast<double>(inElapsedSinceLastCall);
 	double currentSimTime = pluginClockSec;
-	double rawFlightTimeSec = static_cast<double>(XPLMGetDataf(XPLMFindDataRef("sim/time/total_flight_time_sec")));
+	XPLMDataRef flightTimeRef = diagFlightTimeRef();
+	double rawFlightTimeSec = flightTimeRef ? static_cast<double>(XPLMGetDataf(flightTimeRef)) : 0.0;
 	TimestampProvider::advanceSimulationClock(static_cast<double>(inElapsedSinceLastCall), rawFlightTimeSec);
+	recordSection(FlightLoopDiagSection::Clock, sectionStartUsec);
 
 	// ==================================================================================
 	// SENSOR DATA - Direct sendHILSensor() at target rate
@@ -622,8 +895,10 @@ float MyFlightLoopCallback(float inElapsedSinceLastCall, float inElapsedTimeSinc
 
 	// Send sensor data at target rate
 	if ((currentSimTime - lastSensorSendTime) >= TARGET_SENSOR_PERIOD) {
+		sectionStartUsec = steadyNowUsec();
 		MAVLinkManager::sendHILSensor(0);
-		if (!ConnectionManager::isConnected()) return -1.0f;
+		recordSection(FlightLoopDiagSection::HILSensor, sectionStartUsec);
+		if (!ConnectionManager::isConnected()) return finishCallback();
 
 		sensorMessageCount++;
 		sensorRateWindowCount++;
@@ -652,10 +927,10 @@ float MyFlightLoopCallback(float inElapsedSinceLastCall, float inElapsedTimeSinc
 			const auto& sensorStats = diagnostics.message_stats[static_cast<size_t>(TimestampProvider::MessageKind::HIL_SENSOR)];
 			const uint64_t sensorP50Usec = TimestampProvider::estimatePercentileUsec(sensorStats, 50.0);
 			const uint64_t sensorP95Usec = TimestampProvider::estimatePercentileUsec(sensorStats, 95.0);
-			XPLMDataRef frameRateRef = XPLMFindDataRef("sim/operation/misc/frame_rate_period");
+			XPLMDataRef frameRateRef = diagFrameRatePeriodRef();
 			float frameRatePeriod = frameRateRef ? XPLMGetDataf(frameRateRef) : 0.0f;
 			float estimatedFps = (frameRatePeriod > 0.0f) ? (1.0f / frameRatePeriod) : 0.0f;
-			XPLMDataRef pausedRef = XPLMFindDataRef("sim/time/paused");
+			XPLMDataRef pausedRef = diagPausedRef();
 			int paused = pausedRef ? XPLMGetDatai(pausedRef) : -1;
 			char buf[640];
 			snprintf(buf, sizeof(buf),
@@ -676,6 +951,7 @@ float MyFlightLoopCallback(float inElapsedSinceLastCall, float inElapsedTimeSinc
 			XPLMDebugString(buf);
 			sensorRateWindowCount = 0;
 			sensorRateWindowStartUsec = wallNowUsec;
+			emitDiagFlightLoop = true;
 		}
 
 		lastSensorSendTime = currentSimTime;
@@ -683,41 +959,57 @@ float MyFlightLoopCallback(float inElapsedSinceLastCall, float inElapsedTimeSinc
 
 	// Send GPS data at target rate (20 Hz) - one message per eligible frame
 	if ((currentSimTime - lastGpsSendTime) >= TARGET_GPS_PERIOD) {
+		sectionStartUsec = steadyNowUsec();
 		MAVLinkManager::sendHILGPS();
-		if (!ConnectionManager::isConnected()) return -1.0f;
+		recordSection(FlightLoopDiagSection::HILGPS, sectionStartUsec);
+		noteWmmCostIfPresent();
+		if (!ConnectionManager::isConnected()) return finishCallback();
 		lastGpsSendTime = currentSimTime;
 	}
 
 	// Optional: Send state quaternion data (10 Hz)
 	if ((currentSimTime - lastStateQuatSendTime) >= TARGET_STATE_QUAT_PERIOD) {
+		sectionStartUsec = steadyNowUsec();
 		MAVLinkManager::sendHILStateQuaternion();
-		if (!ConnectionManager::isConnected()) return -1.0f;
+		recordSection(FlightLoopDiagSection::HILState, sectionStartUsec);
+		if (!ConnectionManager::isConnected()) return finishCallback();
 		lastStateQuatSendTime = currentSimTime;
 	}
 
 	// Optional: Send RC data (10 Hz)
 	if ((currentSimTime - lastRcSendTime) >= TARGET_RC_PERIOD) {
+		sectionStartUsec = steadyNowUsec();
 		MAVLinkManager::sendHILRCInputs();
-		if (!ConnectionManager::isConnected()) return -1.0f;
+		recordSection(FlightLoopDiagSection::HILRC, sectionStartUsec);
+		if (!ConnectionManager::isConnected()) return finishCallback();
 		lastRcSendTime = currentSimTime;
 	}
 
 
 	// Continuously receive and process actuator data
+	sectionStartUsec = steadyNowUsec();
 	ConnectionManager::receiveData();
+	recordSection(FlightLoopDiagSection::Receive, sectionStartUsec);
 
 	// Actuator overrides
+	sectionStartUsec = steadyNowUsec();
 	DataRefManager::overrideActuators();
+	recordSection(FlightLoopDiagSection::Override, sectionStartUsec);
 
 	// Update the SITL timestep with the loop callback rate
 	DataRefManager::SIM_Timestep = inElapsedSinceLastCall;
 
 	lastFlightTime = static_cast<float>(currentSimTime);
 
+	float callbackReturn = finishCallback();
+	if (emitDiagFlightLoop) {
+		emitFlightLoopDiagnostics(currentSimTime);
+	}
+
 	// Return -1.0f to be called EVERY FRAME (most robust for frame-rate independence)
 	// This ensures the plugin works correctly at any X-Plane FPS (30-150+)
 	// Message rates are controlled by simulation time, not callback frequency
-	return -1.0f;
+	return callbackReturn;
 }
 
 

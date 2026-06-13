@@ -5,6 +5,7 @@
 #include <vector>
 #include <variant>
 #include <functional>
+#include <cstdint>
 #include "XPLMDisplay.h"
 #include "XPLMDataAccess.h"
 #include "XPLMDisplay.h"
@@ -65,6 +66,7 @@ public:
     static void resetActuatorValues();  // CRITICAL: Zero all actuators before disconnect
     static int drawActualThrottle(XPLMWindowID in_window_id, int l, int t, float col_white[], int lineOffset);
     static Eigen::Vector3f updateEarthMagneticFieldNED(const GeodeticPosition& position);
+    static uint64_t consumeLastMagUpdateCostUsec();
     static float calculateDistance(const GeodeticPosition& pos1, const GeodeticPosition& pos2);
     static Eigen::Vector3f convertNEDToBody(const Eigen::Vector3f& nedVector, float roll, float pitch, float yaw);
     static void initializeMagneticField();
@@ -106,4 +108,3 @@ public:
     static void applyBrake(int motorIndex, bool enable);
 
 };
-
