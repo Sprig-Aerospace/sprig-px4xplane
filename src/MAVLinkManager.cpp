@@ -23,6 +23,7 @@ MAVLinkManager::HILActuatorControlsData MAVLinkManager::hilActuatorControlsData 
 static uint32_t g_sessionResetGeneration = 1;
 static bool g_firstSensorFrameLogged = false;
 static bool g_firstActuatorFrameLogged = false;
+static MAVLinkManager::ReceiveParseDiagnostics g_lastReceiveParseDiagnostics;
 
 
 
@@ -891,15 +892,30 @@ uint16_t MAVLinkManager::mapRCChannel(float value, float min, float max) {
  * @param size Size of the received data buffer.
  */
 void MAVLinkManager::receiveHILActuatorControls(uint8_t* buffer, int size) {
+	g_lastReceiveParseDiagnostics = ReceiveParseDiagnostics{};
+	g_lastReceiveParseDiagnostics.bytesProcessed = size;
 	if (!ConnectionManager::isConnected()) return;
 
 	mavlink_message_t msg;
 	mavlink_status_t status;
 	for (int i = 0; i < size; ++i) {
 		if (mavlink_parse_char(MAVLINK_COMM_0, buffer[i], &msg, &status)) {
+			g_lastReceiveParseDiagnostics.messagesParsed++;
 			handleReceivedMessage(msg);
 		}
 	}
+	mavlink_status_t* channelStatus = mavlink_get_channel_status(MAVLINK_COMM_0);
+	if (channelStatus != nullptr) {
+		g_lastReceiveParseDiagnostics.finalParseState = channelStatus->parse_state;
+		g_lastReceiveParseDiagnostics.parseIncomplete = channelStatus->parse_state != MAVLINK_PARSE_STATE_IDLE;
+	} else {
+		g_lastReceiveParseDiagnostics.finalParseState = status.parse_state;
+		g_lastReceiveParseDiagnostics.parseIncomplete = status.parse_state != MAVLINK_PARSE_STATE_IDLE;
+	}
+}
+
+MAVLinkManager::ReceiveParseDiagnostics MAVLinkManager::getLastReceiveParseDiagnostics() {
+	return g_lastReceiveParseDiagnostics;
 }
 
 /**
