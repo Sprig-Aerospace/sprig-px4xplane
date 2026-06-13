@@ -17,6 +17,10 @@
 #include <ctime>
 #include <FilterUtils.h>
 
+namespace {
+uint64_t g_lastMagUpdateCostUsec = 0;
+}
+
 std::vector<DataRefItem> DataRefManager::dataRefs = {
 	// Position Information
 	{"Position", "Latitude", "sim/flightmodel/position/latitude", "deg", 1, DRT_FLOAT, std::function<float(const char*)>(getFloat)},
@@ -339,7 +343,11 @@ Eigen::Vector3f DataRefManager::updateEarthMagneticFieldNED(const GeodeticPositi
 	// Calculate the magnetic field using the World Magnetic Model (WMM2025)
 	// Dynamic decimal year ensures correct magnetic declination for current date
 	float decimalYear = calculateDecimalYear();
+	auto wmmStart = std::chrono::steady_clock::now();
 	geomag::Vector magField = geomag::GeoMag(decimalYear, ecefPosition, geomag::WMM2025);
+	auto wmmEnd = std::chrono::steady_clock::now();
+	g_lastMagUpdateCostUsec = static_cast<uint64_t>(
+		std::chrono::duration_cast<std::chrono::microseconds>(wmmEnd - wmmStart).count());
 	geomag::Elements nedElements = geomag::magField2Elements(magField, position.latitude, position.longitude);
 
 	// Convert the magnetic field to NED (North-East-Down) coordinates and scale it
@@ -355,6 +363,12 @@ Eigen::Vector3f DataRefManager::updateEarthMagneticFieldNED(const GeodeticPositi
 
 
 	return earthMagneticFieldNED;
+}
+
+uint64_t DataRefManager::consumeLastMagUpdateCostUsec() {
+	uint64_t costUsec = g_lastMagUpdateCostUsec;
+	g_lastMagUpdateCostUsec = 0;
+	return costUsec;
 }
 
 /**
