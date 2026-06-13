@@ -5,6 +5,7 @@
 
 #include "TimestampProvider.h"
 #include "ConfigManager.h"
+#include "TimeManager.h"
 #include "XPLMUtilities.h"
 
 #include <cmath>
@@ -13,7 +14,13 @@
 bool TimestampProvider::s_initialized = false;
 bool TimestampProvider::s_hasAdvancedThisSession = false;
 TimestampProvider::TimePoint TimestampProvider::s_baseTimePoint;
+uint64_t TimestampProvider::s_sessionStartWallUsec = 0;
 uint64_t TimestampProvider::s_simulationClockUsec = TimestampProvider::BASE_OFFSET_USEC;
+// Initial session generation must match MAVLinkManager::g_sessionResetGeneration's
+// initial value (1) so the [TIMESTAMP] grammar reports the same per-session
+// generation as [RATE]/[TIMESTAMP_SUMMARY] before the first MAVLinkManager::reset().
+// After reset, setDiagnosticsGeneration() is the single authority for both grammars.
+uint32_t TimestampProvider::s_generation = 1;
 TimestampProvider::Diagnostics TimestampProvider::s_diagnostics;
 
 void TimestampProvider::initializeIfNeeded() {
@@ -22,6 +29,7 @@ void TimestampProvider::initializeIfNeeded() {
     }
 
     s_baseTimePoint = SteadyClock::now();
+    s_sessionStartWallUsec = TimeManager::getCurrentTimeUsec();
     s_simulationClockUsec = BASE_OFFSET_USEC;
     resetDiagnostics();
     s_initialized = true;
@@ -29,7 +37,9 @@ void TimestampProvider::initializeIfNeeded() {
     if (ConfigManager::debug_log_sensor_timing) {
         char buf[256];
         snprintf(buf, sizeof(buf),
-            "px4xplane: [TIMESTAMP] Simulation-step clock initialized, base=%llu us\n",
+            "px4xplane: [TIMESTAMP] diag_version=1 generation=%u wall_time_usec=%llu event=clock_initialized base_usec=%llu drift=unmeasured\n",
+            s_generation,
+            (unsigned long long)s_diagnostics.wall_time_usec,
             (unsigned long long)s_simulationClockUsec);
         XPLMDebugString(buf);
     }
@@ -48,7 +58,7 @@ void TimestampProvider::advanceSimulationClock(double elapsed_since_last_call_se
         s_diagnostics.sub_frame_branch_count++;
         s_diagnostics.last_delta_usec = 0;
         s_diagnostics.simulation_clock_usec = s_simulationClockUsec;
-        s_diagnostics.drift_usec = 0;
+        updateDriftMeasurement();
         return;
     }
 
@@ -73,7 +83,7 @@ void TimestampProvider::advanceSimulationClock(double elapsed_since_last_call_se
     s_simulationClockUsec += deltaUsec;
     s_diagnostics.simulation_clock_usec = s_simulationClockUsec;
     s_diagnostics.last_delta_usec = deltaUsec;
-    s_diagnostics.drift_usec = 0;
+    updateDriftMeasurement();
 
     if (ConfigManager::debug_log_sensor_timing) {
         static uint64_t lastLogUsec = 0;
@@ -84,16 +94,26 @@ void TimestampProvider::advanceSimulationClock(double elapsed_since_last_call_se
                 (s_diagnostics.last_branch == AdvanceBranch::MAX_DELTA_CAP) ? "max-delta-cap" :
                 (s_diagnostics.last_branch == AdvanceBranch::NORMAL_DELTA) ? "normal-delta" :
                 "sub-frame/min-delta";
-            char buf[384];
+            // Mirror [TIMESTAMP_SUMMARY] (MAVLinkManager.cpp): never fabricate a
+            // numeric drift when it is unmeasured; emit the literal "unmeasured".
+            char driftBuf[64];
+            if (s_diagnostics.drift_measured) {
+                snprintf(driftBuf, sizeof(driftBuf), "%+.3f", s_diagnostics.drift_usec / 1000.0);
+            } else {
+                snprintf(driftBuf, sizeof(driftBuf), "unmeasured");
+            }
+            char buf[512];
             snprintf(buf, sizeof(buf),
-                "px4xplane: [TIMESTAMP] branch=%s raw_flight=%.6f delta=%.6f sec step_clock=%.6f sec last_dt=%llu us capped=%llu drift=%+.3f ms\n",
+                "px4xplane: [TIMESTAMP] diag_version=1 generation=%u wall_time_usec=%llu event=clock_advance branch=%s raw_flight=%.6f delta_sec=%.6f step_clock_sec=%.6f last_dt_usec=%llu capped=%llu drift_ms=%s\n",
+                s_generation,
+                (unsigned long long)s_diagnostics.wall_time_usec,
                 branchName,
                 s_diagnostics.raw_total_flight_time_sec,
                 s_diagnostics.computed_delta_sec,
                 s_diagnostics.simulation_clock_usec / 1e6,
                 (unsigned long long)s_diagnostics.last_delta_usec,
                 (unsigned long long)s_diagnostics.capped_large_delta_count,
-                s_diagnostics.drift_usec / 1000.0);
+                driftBuf);
             XPLMDebugString(buf);
             lastLogUsec = s_simulationClockUsec;
         }
@@ -154,14 +174,64 @@ void TimestampProvider::noteMessageTimestamp(MessageKind kind, uint64_t timestam
     stats.sample_count++;
 }
 
+void TimestampProvider::setDiagnosticsGeneration(uint32_t generation) {
+    s_generation = generation;
+    s_diagnostics.generation = generation;
+}
+
+uint64_t TimestampProvider::estimatePercentileUsec(const DeltaStats& stats, double percentile) {
+    if (stats.sample_count <= 1) {
+        return 0;
+    }
+
+    const uint64_t deltaSamples = stats.sample_count - 1;
+    uint64_t rank = static_cast<uint64_t>(std::ceil((percentile / 100.0) * static_cast<double>(deltaSamples)));
+    if (rank == 0) {
+        rank = 1;
+    }
+
+    struct Bucket {
+        uint64_t count;
+        uint64_t upper_bound_usec;
+    };
+
+    const Bucket buckets[] = {
+        {stats.hist_under_1000_usec, 1000},
+        {stats.hist_1000_to_5000_usec, 5000},
+        {stats.hist_5000_to_15000_usec, 15000},
+        {stats.hist_15000_to_25000_usec, 25000},
+        {stats.hist_25000_to_35000_usec, 35000},
+        {stats.hist_35000_to_45000_usec, 45000},
+        {stats.hist_45000_to_60000_usec, 60000},
+        {stats.hist_60000_to_100000_usec, 100000},
+        {stats.hist_over_100000_usec, stats.max_delta_usec},
+    };
+
+    uint64_t cumulative = 0;
+    for (const Bucket& bucket : buckets) {
+        cumulative += bucket.count;
+        if (cumulative >= rank) {
+            return bucket.upper_bound_usec;
+        }
+    }
+
+    return stats.max_delta_usec;
+}
+
 void TimestampProvider::reset() {
     s_initialized = false;
     s_hasAdvancedThisSession = false;
+    s_sessionStartWallUsec = 0;
     s_simulationClockUsec = BASE_OFFSET_USEC;
     resetDiagnostics();
 
     if (ConfigManager::debug_log_sensor_timing) {
-        XPLMDebugString("px4xplane: [TIMESTAMP] Simulation-step clock reset - next session starts at 1000000 us\n");
+        char buf[256];
+        snprintf(buf, sizeof(buf),
+            "px4xplane: [TIMESTAMP] diag_version=1 generation=%u wall_time_usec=%llu event=clock_reset base_usec=1000000 drift=unmeasured\n",
+            s_generation,
+            (unsigned long long)s_diagnostics.wall_time_usec);
+        XPLMDebugString(buf);
     }
 }
 
@@ -179,4 +249,24 @@ TimestampProvider::Diagnostics TimestampProvider::getDiagnostics() {
 void TimestampProvider::resetDiagnostics() {
     s_diagnostics = Diagnostics{};
     s_diagnostics.simulation_clock_usec = s_simulationClockUsec;
+    s_diagnostics.generation = s_generation;
+    s_diagnostics.wall_time_usec = s_sessionStartWallUsec;
+    s_diagnostics.drift_measured = false;
+}
+
+void TimestampProvider::updateDriftMeasurement() {
+    const uint64_t wallNowUsec = TimeManager::getCurrentTimeUsec();
+    s_diagnostics.wall_time_usec = wallNowUsec;
+    s_diagnostics.generation = s_generation;
+
+    if (s_sessionStartWallUsec == 0) {
+        s_diagnostics.drift_measured = false;
+        s_diagnostics.drift_usec = 0;
+        return;
+    }
+
+    const uint64_t wallElapsedUsec = wallNowUsec - s_sessionStartWallUsec;
+    const int64_t expectedClockUsec = static_cast<int64_t>(BASE_OFFSET_USEC + wallElapsedUsec);
+    s_diagnostics.drift_usec = static_cast<int64_t>(s_simulationClockUsec) - expectedClockUsec;
+    s_diagnostics.drift_measured = true;
 }

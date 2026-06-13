@@ -221,8 +221,13 @@ std::string buildTransportSessionEventJson(
 
     std::ostringstream json;
     json << "{"
+         << "\"diag_version\":1,"
+         << "\"wall_time_usec\":" << nowUsec << ","
          << "\"event\":\"" << escapeJson(eventType) << "\","
-         << "\"generation\":" << g_transportSessionState.generation << ","
+         // transport_generation is the transport-session reset counter, distinct from the
+         // sim/reset `generation` (g_sessionResetGeneration) emitted by
+         // [RATE]/[TIMESTAMP]/[TIMESTAMP_SUMMARY]. Do NOT join across grammars on this field.
+         << "\"transport_generation\":" << g_transportSessionState.generation << ","
          << "\"reset_cause\":\"" << escapeJson(g_transportSessionState.resetCause) << "\","
          << "\"cause\":\"" << escapeJson(cause) << "\","
          << "\"socket_error_code\":" << socketErrorCode << ","

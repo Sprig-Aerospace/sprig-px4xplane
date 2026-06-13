@@ -18,6 +18,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 REPO_CONFIG = ROOT / "config" / "config.ini"
+
+# The only diag_version this parser understands. Any line carrying a different
+# diag_version is recorded to LogEvidence.version_mismatch and skipped (fail
+# closed) rather than being silently parsed as v1. Bump this in lockstep with
+# the C++ emitters and the golden fixtures under scripts/testdata/.
+SUPPORTED_DIAG_VERSION = 1
+GOLDEN_LINES_FILE = ROOT / "scripts" / "testdata" / "diag_golden_lines.txt"
 DEFAULT_XPLANE_LOG = Path.home() / "X-Plane 12" / "Log.txt"
 DEFAULT_INSTALLED_CONFIG = Path.home() / "X-Plane 12" / "Resources" / "plugins" / "px4xplane" / "64" / "config.ini"
 DEFAULT_OUTPUT_ROOT = ROOT / "build" / "diagnostics"
@@ -33,11 +40,10 @@ PX4XPLANE_PATTERNS = (
 )
 
 TRANSPORT_EVENT_RE = re.compile(r"\[TRANSPORT_EVENT\]\s+({.*})")
-HIL_SENSOR_RATE_RE = re.compile(
-    r"HIL_SENSOR:\s+(?P<count>\d+)\s+msgs,\s+avg\s+(?P<rate>[0-9.]+)\s+Hz\s+\(target\s+(?P<target>\d+)\s+Hz\)"
-)
-EFFECTIVE_RATE_RE = re.compile(
-    r"\[RATE\].*achieved Hz SENSOR:(?P<sensor>[0-9.]+).*X-Plane:(?P<xplane_fps>[0-9.]+) FPS"
+RATE_RE = re.compile(
+    r"\[RATE\]\s+diag_version=(?P<diag_version>\d+)\s+generation=(?P<generation>\d+)\s+"
+    r"wall_time_usec=(?P<wall_time_usec>\d+).*?\s+rate_hz=(?P<sensor>[0-9.]+|unmeasured)\s+"
+    r"target_hz=(?P<target>\d+)\s+estimated_fps=(?P<xplane_fps>[0-9.]+)"
 )
 MESSAGE_PERIOD_RE = re.compile(
     r"Message periods initialized - SENSOR:(?P<sensor_period>[0-9.]+)s \((?P<sensor>\d+)Hz\) "
@@ -50,7 +56,10 @@ MAVLINK_RATES_RE = re.compile(
 )
 CONFIG_PATH_RE = re.compile(r"(?:Resolved config file path|Loading config file from):\s+(?P<path>.+)")
 CONFIG_NAME_RE = re.compile(r"Config Name:\s+(?P<name>.+)")
-TIMESTAMP_RE = re.compile(r"\[TIMESTAMP\]\s+(?P<message>.+)")
+TIMESTAMP_RE = re.compile(
+    r"\[TIMESTAMP\]\s+diag_version=(?P<diag_version>\d+)\s+"
+    r"generation=(?P<generation>\d+)\s+(?P<message>.+)"
+)
 FPS_RE = re.compile(r'"estimated_fps":(?P<fps>-?[0-9.]+)')
 
 
@@ -65,6 +74,7 @@ class LogEvidence:
     mavlink_rates: list[dict[str, int]] = field(default_factory=list)
     estimated_fps: list[float] = field(default_factory=list)
     transport_alerts: list[str] = field(default_factory=list)
+    version_mismatch: list[str] = field(default_factory=list)
 
 
 def sha256_file(path: Path) -> str | None:
@@ -135,18 +145,28 @@ def parse_log(path: Path) -> LogEvidence:
             if match := TRANSPORT_EVENT_RE.search(line):
                 try:
                     event = json.loads(match.group(1))
+                except json.JSONDecodeError:
+                    evidence.transport_alerts.append(line)
+                else:
+                    # Fail closed: only parse transport events of the supported
+                    # diag_version. Unknown versions are recorded, not trusted.
+                    if event.get("diag_version") != SUPPORTED_DIAG_VERSION:
+                        evidence.version_mismatch.append(line)
+                        continue
                     evidence.transport_events.append(event)
                     fps = event.get("estimated_fps")
                     if isinstance(fps, (int, float)) and fps > 0:
                         evidence.estimated_fps.append(float(fps))
-                except json.JSONDecodeError:
-                    evidence.transport_alerts.append(line)
 
-            if match := HIL_SENSOR_RATE_RE.search(line):
-                evidence.hil_sensor_rates_hz.append(float(match.group("rate")))
-
-            if match := EFFECTIVE_RATE_RE.search(line):
-                evidence.hil_sensor_rates_hz.append(float(match.group("sensor")))
+            if match := RATE_RE.search(line):
+                if int(match.group("diag_version")) != SUPPORTED_DIAG_VERSION:
+                    evidence.version_mismatch.append(line)
+                    continue
+                # rate_hz=unmeasured marks an empty wall window (honest-metrics);
+                # skip it from numeric rate aggregation rather than crashing.
+                sensor_rate = match.group("sensor")
+                if sensor_rate != "unmeasured":
+                    evidence.hil_sensor_rates_hz.append(float(sensor_rate))
                 evidence.estimated_fps.append(float(match.group("xplane_fps")))
 
             if match := MESSAGE_PERIOD_RE.search(line):
@@ -176,6 +196,9 @@ def parse_log(path: Path) -> LogEvidence:
                 evidence.config_names.append(match.group("name").strip())
 
             if match := TIMESTAMP_RE.search(line):
+                if int(match.group("diag_version")) != SUPPORTED_DIAG_VERSION:
+                    evidence.version_mismatch.append(line)
+                    continue
                 evidence.timestamp_lines.append(match.group("message").strip())
 
             lowered = line.lower()
@@ -255,6 +278,10 @@ def render_summary(
         metric_line("TimestampProvider lines", len(evidence.timestamp_lines)),
         metric_line("Transport events", len(evidence.transport_events)),
         metric_line("Transport/drop alerts", len(evidence.transport_alerts)),
+        metric_line(
+            f"Diag version mismatches (expected diag_version={SUPPORTED_DIAG_VERSION}, skipped)",
+            len(evidence.version_mismatch),
+        ),
         "",
         "## Decision Rules",
         "- render FPS approximately callback Hz approximately HIL_SENSOR send Hz approximately PX4 IMU rate approximately 24: frame/callback-bound operation; do not assume scheduler fix first.",
@@ -299,6 +326,7 @@ def render_summary(
         "- transport_events.jsonl",
         "- timestamp_lines.log",
         "- transport_alerts.log",
+        "- version_mismatch.log",
         "- installed_config.ini",
         "- installed_vs_repo_config.diff",
         "- px4_output.txt, when provided",
@@ -326,6 +354,10 @@ def write_bundle(output_dir: Path, xplane_log: Path, installed_config: Path, px4
         "\n".join(evidence.transport_alerts) + ("\n" if evidence.transport_alerts else ""),
         encoding="utf-8",
     )
+    (output_dir / "version_mismatch.log").write_text(
+        "\n".join(evidence.version_mismatch) + ("\n" if evidence.version_mismatch else ""),
+        encoding="utf-8",
+    )
 
     if installed_config.is_file():
         shutil.copy2(installed_config, output_dir / "installed_config.ini")
@@ -351,13 +383,100 @@ def write_bundle(output_dir: Path, xplane_log: Path, installed_config: Path, px4
     return output_dir
 
 
+def load_golden_lines() -> dict[str, list[str]]:
+    """Load emitter-derived golden log lines grouped by KIND.
+
+    The fixture (scripts/testdata/diag_golden_lines.txt) reproduces the exact
+    field list/order/format tokens of the C++ snprintf() emitters. Self-test
+    asserts the parser regexes match these goldens so C++ format drift is caught
+    in review. Regenerate the fixture whenever the C++ format strings change.
+    """
+    grouped: dict[str, list[str]] = {}
+    text = GOLDEN_LINES_FILE.read_text(encoding="utf-8")
+    for raw in text.splitlines():
+        if not raw.strip() or raw.lstrip().startswith("#"):
+            continue
+        kind, _, golden = raw.partition("\t")
+        grouped.setdefault(kind.strip(), []).append(golden)
+    return grouped
+
+
 def run_self_test() -> int:
+    # --- Part 1: emitter-derived golden parity ---------------------------------
+    # Assert the parser regexes match the golden lines that mirror the C++
+    # snprintf() format strings, and that diag_version/generation parse to the
+    # expected values. Expected per fixture annotation: diag_version=1 and
+    # generation=2 on RATE/TIMESTAMP/SUMMARY lines; the TRANSPORT golden carries
+    # transport_generation (transport-session counter) = 1, not the cross-grammar
+    # generation. RATE goldens include a rate_hz=unmeasured (empty-window) variant.
+    goldens = load_golden_lines()
+    for kind in ("RATE", "TIMESTAMP", "SUMMARY", "TRANSPORT"):
+        if not goldens.get(kind):
+            print(f"[FAIL] golden fixture missing KIND={kind}")
+            return 1
+
+    saw_unmeasured_rate = False
+    for line in goldens["RATE"]:
+        m = RATE_RE.search(line)
+        if not m:
+            print(f"[FAIL] RATE_RE did not match golden: {line}")
+            return 1
+        if int(m.group("diag_version")) != 1 or int(m.group("generation")) != 2:
+            print(f"[FAIL] RATE golden version/generation mismatch: {line}")
+            return 1
+        # honest-metrics: rate_hz=unmeasured marks an empty wall window. The regex
+        # must capture it as the literal token (not a float) so aggregation skips it.
+        if m.group("sensor") == "unmeasured":
+            saw_unmeasured_rate = True
+    if not saw_unmeasured_rate:
+        print("[FAIL] RATE goldens missing rate_hz=unmeasured variant")
+        return 1
+
+    for line in goldens["TIMESTAMP"]:
+        m = TIMESTAMP_RE.search(line)
+        if not m:
+            print(f"[FAIL] TIMESTAMP_RE did not match golden: {line}")
+            return 1
+        if int(m.group("diag_version")) != 1 or int(m.group("generation")) != 2:
+            print(f"[FAIL] TIMESTAMP golden version/generation mismatch: {line}")
+            return 1
+
+    for line in goldens["TRANSPORT"]:
+        tm = TRANSPORT_EVENT_RE.search(line)
+        if not tm:
+            print(f"[FAIL] TRANSPORT_EVENT_RE did not match golden: {line}")
+            return 1
+        event = json.loads(tm.group(1))
+        # transport_generation is the transport-session reset counter (distinct
+        # from the cross-grammar `generation`). First-session client_connected
+        # emits transport_generation=1 (ConnectionManager.cpp:531 increments
+        # 0->1 just before the emit at :543).
+        if event.get("diag_version") != 1 or event.get("transport_generation") != 1:
+            print(f"[FAIL] TRANSPORT golden version/transport_generation mismatch: {line}")
+            return 1
+
+    # --- Part 2: version lock fails closed -------------------------------------
+    # A v2 RATE/TIMESTAMP/TRANSPORT line must be recorded as a mismatch and NOT
+    # parsed as v1 data.
     with tempfile.TemporaryDirectory(prefix="px4xplane-hitl-diag-") as tmp:
         tmp_path = Path(tmp)
         sample_log = tmp_path / "Log.txt"
         sample_config = tmp_path / "config.ini"
         sample_px4 = tmp_path / "px4.txt"
         out_dir = tmp_path / "bundle"
+
+        v1_rate = goldens["RATE"][0]
+        unmeasured_rate = next(
+            (r for r in goldens["RATE"] if "rate_hz=unmeasured" in r), None
+        )
+        if unmeasured_rate is None:
+            print("[FAIL] no rate_hz=unmeasured golden available for parse test")
+            return 1
+        v1_timestamp = goldens["TIMESTAMP"][0]
+        v1_transport = goldens["TRANSPORT"][0]
+        v2_rate = v1_rate.replace("diag_version=1", "diag_version=2", 1)
+        v2_timestamp = v1_timestamp.replace("diag_version=1", "diag_version=2", 1)
+        v2_transport = v1_transport.replace('"diag_version":1', '"diag_version":2', 1)
 
         sample_log.write_text(
             "\n".join(
@@ -367,10 +486,13 @@ def run_self_test() -> int:
                     "px4xplane: MAVLink rates - SENSOR:200Hz GPS:10Hz STATE:50Hz RC:50Hz",
                     "px4xplane: Message periods initialized - SENSOR:0.0050s (200Hz) GPS:0.1000s (10Hz) STATE:0.0200s (50Hz) RC:0.0200s (50Hz)",
                     "px4xplane: Config Name: Alia250",
-                    "px4xplane: [20.0s] HIL_SENSOR: 1000 msgs, avg 24.3 Hz (target 200 Hz)",
-                    "px4xplane: [RATE] target Hz SENSOR:60 GPS:5 STATE:20 RC:20; achieved Hz SENSOR:26.5 GPS:4.8 STATE:13.9 RC:13.9; X-Plane:52.3 FPS; policy=clamp+warn/no-catch-up/no-auto-degrade",
-                    'px4xplane: [TRANSPORT_EVENT] {"event":"client_connected","estimated_fps":24.6,"flight_loop_counter":42}',
-                    "px4xplane: [TIMESTAMP] t=20.0s, drift=+1.000ms, avg_delta=40.65ms",
+                    v1_rate,
+                    unmeasured_rate,
+                    v1_transport,
+                    v1_timestamp,
+                    v2_rate,
+                    v2_transport,
+                    v2_timestamp,
                     "px4xplane: Send backpressure from PX4 client; dropping this frame (count=1).",
                 ]
             )
@@ -380,13 +502,30 @@ def run_self_test() -> int:
         sample_config.write_text(REPO_CONFIG.read_text(encoding="utf-8-sig", errors="replace"), encoding="utf-8")
         sample_px4.write_text("param show IMU_INTEG_RATE\n", encoding="utf-8")
 
+        evidence = parse_log(sample_log)
+        if len(evidence.version_mismatch) != 3:
+            print(f"[FAIL] expected 3 version mismatches, got {len(evidence.version_mismatch)}")
+            return 1
+        # v1 lines parsed exactly once each; v2 lines skipped. The injected
+        # rate_hz=unmeasured v1 line must be parsed without crashing AND excluded
+        # from numeric aggregation, so the result stays exactly [25.0].
+        if evidence.hil_sensor_rates_hz != [25.0]:
+            print(f"[FAIL] RATE aggregation wrong (v2 leak or unmeasured not skipped): {evidence.hil_sensor_rates_hz}")
+            return 1
+        if len(evidence.timestamp_lines) != 1:
+            print(f"[FAIL] v2 TIMESTAMP leaked into parsed lines: {evidence.timestamp_lines}")
+            return 1
+        if len(evidence.transport_events) != 1:
+            print(f"[FAIL] v2 TRANSPORT leaked into parsed events: {evidence.transport_events}")
+            return 1
+
         write_bundle(out_dir, sample_log, sample_config, sample_px4)
         summary = (out_dir / "README.md").read_text(encoding="utf-8")
         required = [
-            "HIL_SENSOR send-rate mean from log: 25.40 Hz",
-            "Estimated callback/FPS mean from log: 38.45 Hz",
+            "HIL_SENSOR send-rate mean from log: 25.00 Hz",
             "PX4 Commands To Run And Paste",
             "frame/callback-bound operation",
+            "skipped): 3",
         ]
         missing = [text for text in required if text not in summary]
         if missing:

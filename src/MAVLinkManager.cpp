@@ -424,24 +424,38 @@ void MAVLinkManager::sendHILSensor(uint8_t sensor_id = 0) {
 		const auto diagnostics = TimestampProvider::getDiagnostics();
 		const auto& sensorStats = diagnostics.message_stats[static_cast<size_t>(TimestampProvider::MessageKind::HIL_SENSOR)];
 		const auto& gpsStats = diagnostics.message_stats[static_cast<size_t>(TimestampProvider::MessageKind::HIL_GPS)];
+		const uint64_t sensorP50Usec = TimestampProvider::estimatePercentileUsec(sensorStats, 50.0);
+		const uint64_t sensorP95Usec = TimestampProvider::estimatePercentileUsec(sensorStats, 95.0);
+		const uint64_t gpsP50Usec = TimestampProvider::estimatePercentileUsec(gpsStats, 50.0);
+		const uint64_t gpsP95Usec = TimestampProvider::estimatePercentileUsec(gpsStats, 95.0);
 		const char* branchName =
 			(diagnostics.last_branch == TimestampProvider::AdvanceBranch::MAX_DELTA_CAP) ? "max-delta-cap" :
 			(diagnostics.last_branch == TimestampProvider::AdvanceBranch::NORMAL_DELTA) ? "normal-delta" :
 			"sub-frame/min-delta";
-		char buf[1024];
+		char driftBuf[64];
+		if (diagnostics.drift_measured) {
+			snprintf(driftBuf, sizeof(driftBuf), "%+.3f", diagnostics.drift_usec / 1000.0);
+		} else {
+			snprintf(driftBuf, sizeof(driftBuf), "unmeasured");
+		}
+		char buf[1536];
 		snprintf(buf, sizeof(buf),
-			"px4xplane: [TIMESTAMP_SUMMARY] branch=%s raw_flight=%.6f callback_delta=%.6f step_clock=%.6f drift_ms=%.3f capped=%llu "
-			"HIL_SENSOR samples=%llu last_dt=%llu min=%llu max=%llu mean=%.1f lt1000=%llu hist_us=<1:%llu,1-5:%llu,5-15:%llu,15-25:%llu,25-35:%llu,35-45:%llu,45-60:%llu,60-100:%llu,>100:%llu> "
-			"HIL_GPS samples=%llu last_dt=%llu min=%llu max=%llu mean=%.1f lt1000=%llu hist_us=<1:%llu,1-5:%llu,5-15:%llu,15-25:%llu,25-35:%llu,35-45:%llu,45-60:%llu,60-100:%llu,>100:%llu>\n",
+			"px4xplane: [TIMESTAMP_SUMMARY] diag_version=1 generation=%u wall_time_usec=%llu branch=%s raw_flight=%.6f callback_delta_sec=%.6f step_clock_sec=%.6f drift_ms=%s capped=%llu "
+			"HIL_SENSOR samples=%llu last_dt_usec=%llu min_usec=%llu p50_bucket_usec=%llu p95_bucket_usec=%llu max_usec=%llu mean_usec=%.1f lt1000=%llu hist_us=<1:%llu,1-5:%llu,5-15:%llu,15-25:%llu,25-35:%llu,35-45:%llu,45-60:%llu,60-100:%llu,>100:%llu> "
+			"HIL_GPS samples=%llu last_dt_usec=%llu min_usec=%llu p50_bucket_usec=%llu p95_bucket_usec=%llu max_usec=%llu mean_usec=%.1f lt1000=%llu hist_us=<1:%llu,1-5:%llu,5-15:%llu,15-25:%llu,25-35:%llu,35-45:%llu,45-60:%llu,60-100:%llu,>100:%llu>\n",
+			g_sessionResetGeneration,
+			(unsigned long long)diagnostics.wall_time_usec,
 			branchName,
 			diagnostics.raw_total_flight_time_sec,
 			diagnostics.computed_delta_sec,
 			diagnostics.simulation_clock_usec / 1e6,
-			diagnostics.drift_usec / 1000.0,
+			driftBuf,
 			(unsigned long long)diagnostics.capped_large_delta_count,
 			(unsigned long long)sensorStats.sample_count,
 			(unsigned long long)sensorStats.last_delta_usec,
 			(unsigned long long)sensorStats.min_delta_usec,
+			(unsigned long long)sensorP50Usec,
+			(unsigned long long)sensorP95Usec,
 			(unsigned long long)sensorStats.max_delta_usec,
 			sensorStats.mean_delta_usec,
 			(unsigned long long)sensorStats.under_1000_usec_count,
@@ -457,6 +471,8 @@ void MAVLinkManager::sendHILSensor(uint8_t sensor_id = 0) {
 			(unsigned long long)gpsStats.sample_count,
 			(unsigned long long)gpsStats.last_delta_usec,
 			(unsigned long long)gpsStats.min_delta_usec,
+			(unsigned long long)gpsP50Usec,
+			(unsigned long long)gpsP95Usec,
 			(unsigned long long)gpsStats.max_delta_usec,
 			gpsStats.mean_delta_usec,
 			(unsigned long long)gpsStats.under_1000_usec_count,
@@ -985,6 +1001,7 @@ void MAVLinkManager::reset(bool resetCalibration) {
 	g_firstActuatorFrameLogged = false;
 
 	// Reset high-precision timestamp provider for clean start on reconnection
+	TimestampProvider::setDiagnosticsGeneration(g_sessionResetGeneration);
 	TimestampProvider::reset();
 
 	// Reset MAVLink parser and transmit sequence state so no partial inbound frame
