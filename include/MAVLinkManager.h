@@ -10,6 +10,13 @@
 
 class MAVLinkManager {
 public:
+    struct ReceiveParseDiagnostics {
+        int bytesProcessed = 0;
+        int messagesParsed = 0;
+        uint8_t finalParseState = 0;
+        bool parseIncomplete = false;
+    };
+
     static void sendHILSensor(uint8_t sensor_id);
     static void sendHILGPS();
     static void sendHILStateQuaternion();
@@ -18,6 +25,7 @@ public:
     static void setPressureData(mavlink_hil_sensor_t& hil_sensor, uint8_t sensor_id = 0);
     static void setMagneticFieldData(mavlink_hil_sensor_t& hil_sensor);
     static void receiveHILActuatorControls(uint8_t* buffer, int size);
+    static ReceiveParseDiagnostics getLastReceiveParseDiagnostics();
     static Eigen::Vector3f computeAcceleration();
     static void setAccelerationData(mavlink_hil_sensor_t& hil_sensor);
     static void reset(bool resetCalibration = false);  // CRITICAL: Reset all static state on disconnect/reconnect
