@@ -31,6 +31,8 @@ debug_log_sensor_timing = true
 
 Do not change `mavlink_*_rate_hz`, PX4 params, TimestampProvider behavior, TCP behavior, or the HIL_SENSOR scheduler while collecting this evidence.
 
+For the accel-calibration poisoning A/B diagnostic, use [ACCEL_CALIBRATION_AB_PROTOCOL.md](ACCEL_CALIBRATION_AB_PROTOCOL.md). That protocol changes only existing config toggles and requires fresh X-Plane starts for Baseline, Run A, and Run B.
+
 ## Run The Bundle Script
 
 After the live HITL run, collect the evidence:
