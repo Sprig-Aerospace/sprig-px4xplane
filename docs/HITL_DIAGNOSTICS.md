@@ -13,7 +13,11 @@ This is an evidence gate before scheduler changes. Do not use this workflow to c
 - callback/FPS timing from structured `[TRANSPORT_EVENT]` lines
 - TimestampProvider drift/delta lines with `generation`, `wall_time_usec`, and wall-clock-referenced `drift_ms` when `debug_log_sensor_timing = true`
 - transport/drop evidence including `send_backpressure`, `send_retry_limit`, `dropping this frame`, `send failure`, and `broken pipe`
+- a `session_boundary.json` file identifying the current PX4 session boundary
+- a `historical/` directory containing pre-boundary evidence excluded from current-readiness metrics
 - exact PX4 commands for the operator to run and paste into the bundle notes
+
+The bundle treats current-readiness evidence as lines at or after the latest `session_reset` for the highest `transport_generation`. Earlier lines are retained under `historical/` for forensics only.
 
 ## Enable Log Evidence
 
