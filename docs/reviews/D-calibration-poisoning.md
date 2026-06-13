@@ -30,8 +30,11 @@ comment says calibration is deliberately preserved across sessions
 
 **Verdict:** cross-session poisoning of the *calibration result* is **POSSIBLE by design**
 (deliberately preserved), but only from a **completed prior session**; partial sample carry-over is
-**POSSIBLE by omission** (no reset at all on the accept path). Whether it is actually causing the
-reported `Accel #0 fail: STALE/TIMEOUT` requires the A/B diagnostic below.
+**POSSIBLE by omission** (no reset at all on the accept path). Operator A/B evidence collected after
+this protocol now gives a strong provisional signal that the calibration path is involved:
+baseline and Run A latched selected-sensor failsafe by `t30`, while the calibration-bypass Run B
+stayed clean in the structured readiness summary. Treat that as provisional until the diagnostic
+captures also include the exact installed config values for each run.
 
 ---
 
@@ -438,7 +441,44 @@ raw data unchanged. It tests whether *any* calibration math (auto or manual) is 
 | Reconnect re-calibrates cleanly and validator clears | Deliberate preservation is safe in this scenario | **CROSS-SESSION POISONING DISPROVED** |
 | `[ACCEL_S5_FINAL]` Z is not near −9.81 in first seconds in baseline but is near −9.81 in B | Calibration is delaying correct gravity report | **VALUE-POISONING SIGNAL** |
 
-### 4.6 What this protocol does NOT do
+### 4.6 Operator evidence collected from the protocol
+
+Evidence location on the operator machine:
+`/Users/briankeeley/docs/px4xplane-logs/{baseline,run-a,run-b,cross-session}/{t0,t5,t30}`.
+
+Structured readiness summary at `t30`:
+
+| Run | `t30` readiness | Sensor validator | Selected gyro/accel validator | Accel stale/timeout | EKF update |
+|---|---|---|---|---|---|
+| Baseline | BLOCKED, 7 blockers | BLOCK | gyro YES 3, accel YES 3 | BLOCK, `Accel #0 fail` | 0 events |
+| Run A, auto-calibration off | BLOCKED, 7 blockers | BLOCK | gyro YES 2, accel YES 2 | BLOCK, `Accel #0 fail` | 0 events |
+| Run B, calibration bypassed | BLOCKED, 5 blockers | OK | gyro NO 0, accel NO 0 | OK in readiness summary | 0 events |
+| Cross-session | BLOCKED, 7 blockers | BLOCK | gyro NO 0, accel YES 2 | BLOCK, `Accel #0 fail` | 0 events |
+
+Interpretation:
+
+- Baseline reproduced the selected-sensor failsafe by `t30`.
+- Run A also reproduced the failsafe by `t5`/`t30`, so disabling auto-calibration alone did not
+  clear the symptom in this run, assuming the intended config was active.
+- Run B is the differentiator: with `debug_accel_bypass_calibration = true`, the `t5` and `t30`
+  structured readiness summaries remained clean for selected gyro/accel failsafe. That is a
+  strong signal that some calibration-path behavior, not raw PX4 cadence alone, contributes to the
+  selected-sensor validator failure.
+- Cross-session evidence showed selected accel failsafe at `t5`/`t30`, but it is not decisive for
+  carry-over because the captured set has a single `cross-session` folder rather than separate
+  session-1/session-2 captures with an explicit reconnect boundary.
+
+Reviewer caveat:
+
+The diagnostic outputs identify the installed config path, but they do not include the actual
+variant values for `accel_auto_calibrate`, `debug_accel_bypass_calibration`, or `accel_offset_*`.
+The raw X-Plane excerpts also contain `[ACCEL_CAL] COMPLETE` lines in the Run A and Run B evidence,
+which could be stale log context or could mean the intended variant config was not applied. The
+evidence is therefore best read as **strong provisional evidence** that bypassing the calibration
+path avoids the selected-sensor failsafe, with config provenance still requiring verification
+before this review turns into a code-fix recommendation.
+
+### 4.7 What this protocol does NOT do
 
 - It does **not** change calibration offsets, noise, or sensor values.
 - It does **not** tune `CAL_*` / `EKF2_*` parameters.
