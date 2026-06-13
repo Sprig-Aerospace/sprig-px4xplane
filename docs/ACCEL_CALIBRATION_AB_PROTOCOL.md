@@ -27,9 +27,24 @@ Before every variant:
 Capture for each variant:
 
 - X-Plane `Log.txt` after the run.
-- Current installed `config.ini`.
+- Current installed `config.ini`, plus its SHA-256 hash, recorded per variant so the
+  reviewer can confirm exactly which config produced each capture set.
 - PX4 diagnostics at t0, t5, and t30 after PX4 connects.
+- Elapsed seconds from PX4 connect to the first `[ACCEL_CAL] COMPLETE` (or `COMPLETE: none`
+  plus the first-30 s `[ACCEL_S5_FINAL]` excerpt as proof it did not complete).
+- X-Plane FPS for the variant, sampled while stationary.
+- Proof the intended toggle is active: the `[ACCEL_S2_CAL]` line showing `Calibrated=` /
+  `ScaleFactor=` for Baseline/Run A, or evidence the bypass path is taken for Run B
+  (`debug_accel_bypass_calibration = true` in the hashed config and the corresponding
+  `[ACCEL_S5_FINAL]` showing the raw, uncalibrated value).
 - Any launcher diagnostic report, if available.
+
+Controlled-run requirements that apply to every variant:
+
+- Use a **fresh X-Plane process** for Baseline, Run A, and Run B (only the cross-session
+  variant reconnects PX4 without restarting X-Plane, by design).
+- The per-variant `config.ini` hash must be committed/attached with the evidence.
+- Do not change cadence, PX4 params, sensor noise, offsets, or calibration code between runs.
 
 ## Variant 1: Baseline
 
@@ -51,9 +66,11 @@ Procedure:
 2. Apply the config block above.
 3. Start X-Plane, load the aircraft, and keep it stationary and level.
 4. Start PX4 and let it connect.
-5. Capture PX4 diagnostics at t0, t5, and t30.
-6. Let the run continue until at least one `[ACCEL_CAL] COMPLETE` or enough `[ACCEL_S5_FINAL]` lines prove calibration did not complete.
-7. Save the X-Plane log and diagnostic report as `baseline`.
+5. Capture PX4 diagnostics at t0, t5, and t30, and note the X-Plane FPS while stationary.
+6. Let the run continue until at least one `[ACCEL_CAL] COMPLETE` appears, or until at
+   least 30 s of `[ACCEL_S5_FINAL]` lines prove calibration did not complete. Record the
+   elapsed seconds from PX4 connect to the first `[ACCEL_CAL] COMPLETE` (or `COMPLETE: none`).
+7. Save the X-Plane log, the hashed `config.ini`, and diagnostic report as `baseline`.
 
 ## Variant 2: Run A, Auto-Calibration Off
 
@@ -158,33 +175,96 @@ cross-session-session2-t30.txt
 
 ## X-Plane Log Signals
 
+### Accel tag inventory (verified against source)
+
+Only the tags below are emitted by the plugin. They were confirmed by grepping
+`src/` and `include/` on the protocol branch. Do not rely on any tag not listed
+here as confirmed; if a tag is marked "NOT in source" the protocol must not treat
+it as observable evidence.
+
+| Tag | Source location | Confirmed? | Notes |
+|---|---|---|---|
+| `[ACCEL_S1_RAW]` | `src/MAVLinkManager.cpp:160` | YES | Raw accel after the -1 factor. |
+| `[ACCEL_S2_CAL]` | `src/MAVLinkManager.cpp:182` | YES | After calibration; logs `ScaleFactor` and `Calibrated=`. |
+| `[ACCEL_S3_VIB]` | `src/MAVLinkManager.cpp:245` | YES | After vibration noise (only when groundspeed > 0.5 m/s). |
+| `[ACCEL_S4_BIAS]` | `src/MAVLinkManager.cpp:266` | YES | Bias stage; `bias=DISABLED(v3.3.2)`. |
+| `[ACCEL_S5_FINAL]` | `src/MAVLinkManager.cpp:302` | YES | Final value sent to PX4. |
+| `[ACCEL_CAL]` | `src/AccelCalibration.cpp:238` | YES | Calibration status line; `[ACCEL_CAL] COMPLETE (v2 SCALING) ...` on success. |
+| `[ACCEL_OK]` | — | NO (literal) | Not a literal source tag; it only appears as a runtime expansion of the `[ACCEL_%s]` format at `src/MAVLinkManager.cpp:328` where `status` is `"OK"` when the aircraft is stationary. Treat any `[ACCEL_OK]` line as the stationary branch of `[ACCEL_%s]`, not as a dedicated success tag. The protocol does not score on it. |
+| `[ACCEL_ERROR]` | — | NO (literal) | Same as above: a runtime expansion of `[ACCEL_%s]` at `src/MAVLinkManager.cpp:328` where `status` is `"ERROR"` (set when `filtered_accel.z > 0` while stationary, i.e. a sign check). It is a sign-convention warning, not a calibration-failure tag. Not present as a literal in source; protocol cannot rely on it. |
+
 For each variant, retain post-session-boundary log excerpts containing:
 
 ```text
 [ACCEL_CAL]
 [ACCEL_S1_RAW]
+[ACCEL_S2_CAL]
+[ACCEL_S3_VIB]
+[ACCEL_S4_BIAS]
 [ACCEL_S5_FINAL]
-[ACCEL_OK]
-[ACCEL_ERROR]
 [TIMESTAMP_SUMMARY]
 [RATE]
 [DIAG_FLIGHTLOOP]
 [TRANSPORT_EVENT]
 ```
 
-Record whether `[ACCEL_CAL] COMPLETE` appeared, the reported scale factor, and whether `[ACCEL_S5_FINAL]` reports Z near `-9.81 m/s^2` during the first seconds after connect.
+### Gravity tolerance band
+
+"Near -9.81" is defined as **Z in the band -9.81 ± 0.2 m/s² (i.e. -10.01 to -9.61 m/s²)**
+on the body-frame Z axis while stationary and level. Basis: the plugin uses
+`GRAVITY = 9.81` (`src/MAVLinkManager.cpp:31`) as expected gravity; at rest the only
+applied noise is the interpolator measurement noise `ACCEL_MEAS_NOISE = 0.05 m/s²`
+(`include/SensorInterpolator.h:135`), because vibration noise (σ = 0.1 m/s²,
+`src/MAVLinkManager.cpp:42`) is only injected when groundspeed > 0.5 m/s. A ±0.2 m/s²
+band is therefore ~4σ over the at-rest noise and tolerant of small attitude error.
+Use this numeric band everywhere; do not record subjective "near -9.81" judgements.
+
+### Per-run required anchors
+
+For every variant (and every session of the cross-session variant) record, alongside the captures:
+
+- **Calibration completion time:** elapsed wall-clock seconds from PX4 connect to the
+  first `[ACCEL_CAL] COMPLETE` line. If no `COMPLETE` line appears, record `COMPLETE: none`
+  and attach the `[ACCEL_S5_FINAL]` excerpt covering at least the first 30 s after connect
+  as proof calibration did not complete.
+- **Reported scale factor** from the `[ACCEL_CAL] COMPLETE` line (or `n/a` if none).
+- **`[ACCEL_S5_FINAL]` Z band check:** whether Z is within -9.81 ± 0.2 m/s² during the
+  first seconds after connect (record the actual min/max Z observed, not just yes/no).
+- **X-Plane FPS** for the variant, sampled while stationary (X-Plane Data Output frame-rate
+  field or the on-screen FPS counter). Record one value per variant: Baseline, Run A, Run B
+  (and per session for cross-session). Runs whose FPS differs by more than ~20% from Baseline
+  are not directly comparable and must be flagged.
 
 ## Scoring
+
+The **primary signal is Baseline vs Run B (calibration bypassed)**. Run B isolates the
+calibration transform itself: it shares Baseline's config except for
+`debug_accel_bypass_calibration`, so a Baseline-vs-Run-B difference points directly at the
+calibration math/state. Run A (auto-calibration off) is a **secondary/corroborating** signal
+only — turning auto-cal off changes the collection window but still routes through the
+calibration apply path, so a Run-A-only difference is weaker evidence and must not be used to
+declare poisoning on its own.
+
+Decision order:
+
+1. Compare Baseline vs Run B first. A clean Run B with a failing Baseline (or a Z-band
+   difference between them) is the confirming signal.
+2. Use Run A only to corroborate the Baseline/Run B result, never as the sole basis.
+3. Evaluate cross-session rows independently.
 
 Use this table for the PR/issue verdict:
 
 | Observation | Interpretation | Verdict |
 |---|---|---|
-| Baseline shows `Accel #0 fail` or validator failsafe YES at t5, while Run A or Run B is clean at t5/t30 | Calibration path poisons validator during startup | POISONING CONFIRMED |
-| Baseline, Run A, and Run B all show the same validator failure | Failure is upstream of calibration, such as raw values, sign, timing, or cadence | POISONING DISPROVED for this symptom |
+| Baseline shows `Accel #0 fail` or validator failsafe YES at t5, while **Run B** is clean at t5/t30 | Calibration transform poisons validator during startup (primary signal) | POISONING CONFIRMED |
+| Baseline fails but only **Run A** (not Run B) is clean | Weaker, collection-window-specific signal; corroborating only — do not declare poisoning on Run A alone | POISONING SUSPECTED (needs Run B) |
+| Baseline and **Run B** show the same validator failure | Failure is upstream of the calibration transform, such as raw values, sign, timing, or cadence | POISONING DISPROVED for this symptom |
 | Cross-session session 2 inherits a prior bad scale factor and validator remains failed | Preserved calibration state is harmful across reconnects | CROSS-SESSION POISONING CONFIRMED |
 | Cross-session session 2 recalibrates or validator clears while level | Preserved state was not harmful in this scenario | CROSS-SESSION POISONING DISPROVED |
-| Baseline `[ACCEL_S5_FINAL]` Z is not near `-9.81`, but Run B is near `-9.81` | Calibration path has a value-poisoning signal | VALUE-POISONING SIGNAL |
+| Baseline `[ACCEL_S5_FINAL]` Z is outside -9.81 ± 0.2 m/s², but **Run B** Z is within -9.81 ± 0.2 m/s² | Calibration transform has a value-poisoning signal | VALUE-POISONING SIGNAL |
+
+Every verdict must cite the per-variant FPS and the config hashes used, so the reviewer can
+confirm the runs are comparable and that the intended toggle was active.
 
 ## Hand-Off Package
 
