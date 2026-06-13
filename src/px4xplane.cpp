@@ -637,9 +637,17 @@ float MyFlightLoopCallback(float inElapsedSinceLastCall, float inElapsedTimeSinc
 			const double wallWindowSec = (wallNowUsec > sensorRateWindowStartUsec)
 				? static_cast<double>(wallNowUsec - sensorRateWindowStartUsec) / 1e6
 				: 0.0;
-			const double wallRateHz = (wallWindowSec > 0.0)
-				? static_cast<double>(sensorRateWindowCount) / wallWindowSec
-				: 0.0;
+			// Honest-metrics: when the wall window is empty (wallNowUsec ==
+			// sensorRateWindowStartUsec) the rate is unmeasurable, not zero.
+			// Emit rate_hz=unmeasured to match the drift_ms=unmeasured convention
+			// rather than fabricating rate_hz=0.00.
+			char wallRateHzBuf[32];
+			if (wallWindowSec > 0.0) {
+				snprintf(wallRateHzBuf, sizeof(wallRateHzBuf), "%.2f",
+					static_cast<double>(sensorRateWindowCount) / wallWindowSec);
+			} else {
+				snprintf(wallRateHzBuf, sizeof(wallRateHzBuf), "unmeasured");
+			}
 			const auto diagnostics = TimestampProvider::getDiagnostics();
 			const auto& sensorStats = diagnostics.message_stats[static_cast<size_t>(TimestampProvider::MessageKind::HIL_SENSOR)];
 			const uint64_t sensorP50Usec = TimestampProvider::estimatePercentileUsec(sensorStats, 50.0);
@@ -651,14 +659,14 @@ float MyFlightLoopCallback(float inElapsedSinceLastCall, float inElapsedTimeSinc
 			int paused = pausedRef ? XPLMGetDatai(pausedRef) : -1;
 			char buf[640];
 			snprintf(buf, sizeof(buf),
-				"px4xplane: [RATE] diag_version=1 generation=%u wall_time_usec=%llu sim_time=%.1fs HIL_SENSOR window_msgs=%d total_msgs=%d wall_window_sec=%.3f rate_hz=%.2f target_hz=%d estimated_fps=%.1f paused=%d dt_p50_bucket_usec=%llu dt_p95_bucket_usec=%llu dt_max_usec=%llu\n",
+				"px4xplane: [RATE] diag_version=1 generation=%u wall_time_usec=%llu sim_time=%.1fs HIL_SENSOR window_msgs=%d total_msgs=%d wall_window_sec=%.3f rate_hz=%s target_hz=%d estimated_fps=%.1f paused=%d dt_p50_bucket_usec=%llu dt_p95_bucket_usec=%llu dt_max_usec=%llu\n",
 				MAVLinkManager::getSessionResetGeneration(),
 				(unsigned long long)wallNowUsec,
 				currentSimTime,
 				sensorRateWindowCount,
 				sensorMessageCount,
 				wallWindowSec,
-				wallRateHz,
+				wallRateHzBuf,
 				ConfigManager::mavlink_sensor_rate_hz,
 				estimatedFps,
 				paused,

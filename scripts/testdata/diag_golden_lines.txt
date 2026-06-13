@@ -12,15 +12,20 @@
 # the expected values, so format drift is catchable in review.
 #
 # Source-of-truth C++ emitters (path:line at time of authoring):
-#   RATE       -> src/px4xplane.cpp:653-667   (snprintf "[RATE] ...")
+#   RATE       -> src/px4xplane.cpp:653-673   (snprintf "[RATE] ...", rate_hz=%s)
 #   TIMESTAMP  -> src/TimestampProvider.cpp:94-105 (snprintf "[TIMESTAMP] ... event=clock_advance")
 #   SUMMARY    -> src/MAVLinkManager.cpp:442-445  (snprintf "[TIMESTAMP_SUMMARY] ...")
-#   TRANSPORT  -> [TRANSPORT_EVENT] JSON object (diag_version + generation keys)
+#   TRANSPORT  -> src/ConnectionManager.cpp:222-252 ([TRANSPORT_EVENT] JSON; diag_version + transport_generation keys)
 #
 # Format: each non-comment, non-blank line is "<KIND>\t<golden log line>".
-# Expected diag_version=1, generation=2 for every golden line below.
+# Expected diag_version=1, generation=2 for RATE/TIMESTAMP/SUMMARY golden lines below.
+# NOTE: the TRANSPORT golden carries transport_generation (the transport-session
+# reset counter), NOT the cross-grammar `generation` (g_sessionResetGeneration).
+# The first-session client_connected event emits transport_generation=1 because
+# ConnectionManager.cpp:531 increments it 0->1 just before the emit at :543.
 RATE	px4xplane: [RATE] diag_version=1 generation=2 wall_time_usec=123456000 sim_time=20.0s HIL_SENSOR window_msgs=1000 total_msgs=1000 wall_window_sec=40.000 rate_hz=25.00 target_hz=60 estimated_fps=52.3 paused=0 dt_p50_bucket_usec=45000 dt_p95_bucket_usec=60000 dt_max_usec=61000
+RATE	px4xplane: [RATE] diag_version=1 generation=2 wall_time_usec=123456000 sim_time=20.0s HIL_SENSOR window_msgs=1000 total_msgs=1000 wall_window_sec=0.000 rate_hz=unmeasured target_hz=60 estimated_fps=52.3 paused=0 dt_p50_bucket_usec=45000 dt_p95_bucket_usec=60000 dt_max_usec=61000
 TIMESTAMP	px4xplane: [TIMESTAMP] diag_version=1 generation=2 wall_time_usec=123456200 event=clock_advance branch=normal-delta raw_flight=20.000000 delta_sec=0.040000 step_clock_sec=21.000000 last_dt_usec=40000 capped=0 drift_ms=+1.000
 TIMESTAMP	px4xplane: [TIMESTAMP] diag_version=1 generation=2 wall_time_usec=123456200 event=clock_advance branch=normal-delta raw_flight=20.000000 delta_sec=0.040000 step_clock_sec=21.000000 last_dt_usec=40000 capped=0 drift_ms=unmeasured
 SUMMARY	px4xplane: [TIMESTAMP_SUMMARY] diag_version=1 generation=2 wall_time_usec=123456300 branch=normal-delta raw_flight=20.000000 callback_delta_sec=0.040000 step_clock_sec=21.000000 drift_ms=unmeasured capped=0 HIL_SENSOR samples=1000 last_dt_usec=40000 min_usec=39000 p50_bucket_usec=45000 p95_bucket_usec=60000 max_usec=61000 mean_usec=40000.0 lt1000=0 hist_us=<1:0,1-5:0,5-15:0,15-25:0,25-35:0,35-45:1000,45-60:0,60-100:0,>100:0> HIL_GPS samples=100 last_dt_usec=400000 min_usec=390000 p50_bucket_usec=400000 p95_bucket_usec=400000 max_usec=410000 mean_usec=400000.0 lt1000=0 hist_us=<1:0,1-5:0,5-15:0,15-25:0,25-35:0,35-45:0,45-60:0,60-100:0,>100:100>
-TRANSPORT	px4xplane: [TRANSPORT_EVENT] {"diag_version":1,"wall_time_usec":123456100,"event":"client_connected","generation":2,"estimated_fps":24.6,"flight_loop_counter":42}
+TRANSPORT	px4xplane: [TRANSPORT_EVENT] {"diag_version":1,"wall_time_usec":123456100,"event":"client_connected","transport_generation":1,"estimated_fps":24.6,"flight_loop_counter":42}

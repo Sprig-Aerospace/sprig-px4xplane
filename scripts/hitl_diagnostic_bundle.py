@@ -42,7 +42,7 @@ PX4XPLANE_PATTERNS = (
 TRANSPORT_EVENT_RE = re.compile(r"\[TRANSPORT_EVENT\]\s+({.*})")
 RATE_RE = re.compile(
     r"\[RATE\]\s+diag_version=(?P<diag_version>\d+)\s+generation=(?P<generation>\d+)\s+"
-    r"wall_time_usec=(?P<wall_time_usec>\d+).*?\s+rate_hz=(?P<sensor>[0-9.]+)\s+"
+    r"wall_time_usec=(?P<wall_time_usec>\d+).*?\s+rate_hz=(?P<sensor>[0-9.]+|unmeasured)\s+"
     r"target_hz=(?P<target>\d+)\s+estimated_fps=(?P<xplane_fps>[0-9.]+)"
 )
 MESSAGE_PERIOD_RE = re.compile(
@@ -162,7 +162,11 @@ def parse_log(path: Path) -> LogEvidence:
                 if int(match.group("diag_version")) != SUPPORTED_DIAG_VERSION:
                     evidence.version_mismatch.append(line)
                     continue
-                evidence.hil_sensor_rates_hz.append(float(match.group("sensor")))
+                # rate_hz=unmeasured marks an empty wall window (honest-metrics);
+                # skip it from numeric rate aggregation rather than crashing.
+                sensor_rate = match.group("sensor")
+                if sensor_rate != "unmeasured":
+                    evidence.hil_sensor_rates_hz.append(float(sensor_rate))
                 evidence.estimated_fps.append(float(match.group("xplane_fps")))
 
             if match := MESSAGE_PERIOD_RE.search(line):
@@ -401,14 +405,17 @@ def run_self_test() -> int:
     # --- Part 1: emitter-derived golden parity ---------------------------------
     # Assert the parser regexes match the golden lines that mirror the C++
     # snprintf() format strings, and that diag_version/generation parse to the
-    # expected values. Expected per fixture annotation: diag_version=1,
-    # generation=2 on every golden line.
+    # expected values. Expected per fixture annotation: diag_version=1 and
+    # generation=2 on RATE/TIMESTAMP/SUMMARY lines; the TRANSPORT golden carries
+    # transport_generation (transport-session counter) = 1, not the cross-grammar
+    # generation. RATE goldens include a rate_hz=unmeasured (empty-window) variant.
     goldens = load_golden_lines()
     for kind in ("RATE", "TIMESTAMP", "SUMMARY", "TRANSPORT"):
         if not goldens.get(kind):
             print(f"[FAIL] golden fixture missing KIND={kind}")
             return 1
 
+    saw_unmeasured_rate = False
     for line in goldens["RATE"]:
         m = RATE_RE.search(line)
         if not m:
@@ -417,6 +424,13 @@ def run_self_test() -> int:
         if int(m.group("diag_version")) != 1 or int(m.group("generation")) != 2:
             print(f"[FAIL] RATE golden version/generation mismatch: {line}")
             return 1
+        # honest-metrics: rate_hz=unmeasured marks an empty wall window. The regex
+        # must capture it as the literal token (not a float) so aggregation skips it.
+        if m.group("sensor") == "unmeasured":
+            saw_unmeasured_rate = True
+    if not saw_unmeasured_rate:
+        print("[FAIL] RATE goldens missing rate_hz=unmeasured variant")
+        return 1
 
     for line in goldens["TIMESTAMP"]:
         m = TIMESTAMP_RE.search(line)
@@ -433,8 +447,12 @@ def run_self_test() -> int:
             print(f"[FAIL] TRANSPORT_EVENT_RE did not match golden: {line}")
             return 1
         event = json.loads(tm.group(1))
-        if event.get("diag_version") != 1 or event.get("generation") != 2:
-            print(f"[FAIL] TRANSPORT golden version/generation mismatch: {line}")
+        # transport_generation is the transport-session reset counter (distinct
+        # from the cross-grammar `generation`). First-session client_connected
+        # emits transport_generation=1 (ConnectionManager.cpp:531 increments
+        # 0->1 just before the emit at :543).
+        if event.get("diag_version") != 1 or event.get("transport_generation") != 1:
+            print(f"[FAIL] TRANSPORT golden version/transport_generation mismatch: {line}")
             return 1
 
     # --- Part 2: version lock fails closed -------------------------------------
@@ -448,6 +466,12 @@ def run_self_test() -> int:
         out_dir = tmp_path / "bundle"
 
         v1_rate = goldens["RATE"][0]
+        unmeasured_rate = next(
+            (r for r in goldens["RATE"] if "rate_hz=unmeasured" in r), None
+        )
+        if unmeasured_rate is None:
+            print("[FAIL] no rate_hz=unmeasured golden available for parse test")
+            return 1
         v1_timestamp = goldens["TIMESTAMP"][0]
         v1_transport = goldens["TRANSPORT"][0]
         v2_rate = v1_rate.replace("diag_version=1", "diag_version=2", 1)
@@ -463,6 +487,7 @@ def run_self_test() -> int:
                     "px4xplane: Message periods initialized - SENSOR:0.0050s (200Hz) GPS:0.1000s (10Hz) STATE:0.0200s (50Hz) RC:0.0200s (50Hz)",
                     "px4xplane: Config Name: Alia250",
                     v1_rate,
+                    unmeasured_rate,
                     v1_transport,
                     v1_timestamp,
                     v2_rate,
@@ -481,9 +506,11 @@ def run_self_test() -> int:
         if len(evidence.version_mismatch) != 3:
             print(f"[FAIL] expected 3 version mismatches, got {len(evidence.version_mismatch)}")
             return 1
-        # v1 lines parsed exactly once each; v2 lines skipped.
+        # v1 lines parsed exactly once each; v2 lines skipped. The injected
+        # rate_hz=unmeasured v1 line must be parsed without crashing AND excluded
+        # from numeric aggregation, so the result stays exactly [25.0].
         if evidence.hil_sensor_rates_hz != [25.0]:
-            print(f"[FAIL] v2 RATE leaked into parsed rates: {evidence.hil_sensor_rates_hz}")
+            print(f"[FAIL] RATE aggregation wrong (v2 leak or unmeasured not skipped): {evidence.hil_sensor_rates_hz}")
             return 1
         if len(evidence.timestamp_lines) != 1:
             print(f"[FAIL] v2 TIMESTAMP leaked into parsed lines: {evidence.timestamp_lines}")
