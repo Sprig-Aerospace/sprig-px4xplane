@@ -332,6 +332,26 @@ def append_line_evidence(evidence: LogEvidence, line: str) -> None:
             evidence.estimated_fps.append(fps)
 
 
+def is_stale_client_replaced(line: str) -> bool:
+    """Return True for a supported-version stale_client_replaced transport event.
+
+    A stale_client_replaced records the teardown of a previous transport session
+    and is pre-boundary by definition. It must NEVER be counted as current-session
+    evidence, even if hostile/malformed log ordering places it after the
+    session_reset / client_connected boundary line.
+
+    Fail closed on diag_version: an unknown-version stale event does not match
+    here, so it falls through to the line-number partition where
+    append_line_evidence records it as a version_mismatch (not trusted).
+    """
+    event = parse_transport_event(line)
+    return (
+        event is not None
+        and event.get("event") == "stale_client_replaced"
+        and event.get("diag_version") == SUPPORTED_DIAG_VERSION
+    )
+
+
 def parse_log(path: Path) -> ParsedLog:
     parsed = ParsedLog()
     if not path.is_file():
@@ -349,7 +369,13 @@ def parse_log(path: Path) -> ParsedLog:
     current_start_line = parsed.boundary.current_start_line or 1
 
     for index, line in enumerate(lines, start=1):
-        if index < current_start_line:
+        if is_stale_client_replaced(line):
+            # Always historical: a stale replacement is pre-boundary by
+            # definition, regardless of its line position. This overrides the
+            # line-number partition so a hostile log cannot smuggle a stale
+            # event into the current partition by placing it after the boundary.
+            append_line_evidence(parsed.historical, line)
+        elif index < current_start_line:
             append_line_evidence(parsed.historical, line)
         else:
             append_line_evidence(parsed.current, line)
@@ -835,6 +861,59 @@ def run_self_test() -> int:
         if incomplete_boundary.get("status") != "incomplete-session" or incomplete_boundary.get("current_start_line") != 1:
             print(f"[FAIL] hitl-diagnostic-bundle-self-test incomplete boundary: {incomplete_boundary}")
             return 1
+
+    # --- Part 4: hostile stale_client_replaced ordering ------------------------
+    # Regression for the Kimi stale-routing blocker: parse_log must route any
+    # supported-version stale_client_replaced event to the historical partition
+    # unconditionally, even when a hostile/malformed log places it AFTER the
+    # current-session boundary line (where the line-number partition alone would
+    # wrongly count it as current evidence). Invariant under test:
+    # stale_client_replaced lands in historical, never in current.
+    def transport_line(event: str, generation: int, usec: int) -> str:
+        return (
+            'px4xplane: [TRANSPORT_EVENT] '
+            f'{{"diag_version":1,"wall_time_usec":{usec},"event":"{event}",'
+            f'"transport_generation":{generation},"estimated_fps":50.0,'
+            '"flight_loop_counter":1}'
+        )
+
+    hostile_cases = {
+        # Case A: gen-1 connect+reset, gen-2 connect+reset (establishes the
+        # boundary), then a gen-2 stale_client_replaced emitted AFTER the
+        # boundary line.
+        "A": [
+            transport_line("client_connected", 1, 100),
+            transport_line("session_reset", 1, 110),
+            transport_line("client_connected", 2, 200),
+            transport_line("session_reset", 2, 210),
+            transport_line("stale_client_replaced", 2, 220),
+        ],
+        # Case B: gen-1 connect+reset, gen-2 connect (NO reset -> the boundary
+        # falls back to the client_connected line), then a gen-2
+        # stale_client_replaced AFTER it.
+        "B": [
+            transport_line("client_connected", 1, 100),
+            transport_line("session_reset", 1, 110),
+            transport_line("client_connected", 2, 200),
+            transport_line("stale_client_replaced", 2, 220),
+        ],
+    }
+
+    for case_name, log_lines in hostile_cases.items():
+        with tempfile.TemporaryDirectory(prefix=f"px4xplane-hitl-diag-hostile-{case_name}-") as tmp:
+            hostile_log = Path(tmp) / "Log.txt"
+            hostile_log.write_text("\n".join(log_lines) + "\n", encoding="utf-8")
+
+            parsed = parse_log(hostile_log)
+            current_events = [e.get("event") for e in parsed.current.transport_events]
+            historical_events = [e.get("event") for e in parsed.historical.transport_events]
+
+            if "stale_client_replaced" in current_events:
+                print(f"[FAIL] case {case_name}: stale_client_replaced leaked into current: {current_events}")
+                return 1
+            if "stale_client_replaced" not in historical_events:
+                print(f"[FAIL] case {case_name}: stale_client_replaced missing from historical: {historical_events}")
+                return 1
 
     print("[PASS] hitl-diagnostic-bundle-self-test")
     return 0
