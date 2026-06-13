@@ -13,7 +13,7 @@ import shutil
 import sys
 import tempfile
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -62,6 +62,65 @@ TIMESTAMP_RE = re.compile(
 )
 FPS_RE = re.compile(r'"estimated_fps":(?P<fps>-?[0-9.]+)')
 
+PX4_CAPTURE_OFFSETS = (("t0", 0), ("t5", 5), ("t30", 30))
+PX4_CAPTURE_COMMANDS = (
+    "param show IMU_INTEG_RATE",
+    "param show EKF2_PREDICT_US",
+    "param show EKF2_EN",
+    "param show SYS_MC_EST_GROUP",
+    "param show SYS_HAS_MAG",
+    "param show EKF2_MAG_TYPE",
+    "param show EKF2_MULTI_IMU",
+    "param show SENS_IMU_MODE",
+    "param show SENS_EN_GPSSIM",
+    "param show SENS_EN_BAROSIM",
+    "param show SENS_EN_MAGSIM",
+    "listener sensor_accel 10",
+    "listener sensor_gyro 10",
+    "listener sensor_baro 5",
+    "listener sensor_mag 5",
+    "listener sensor_gps 5",
+    "listener vehicle_imu 10",
+    "listener vehicle_imu_status 3",
+    "listener vehicle_acceleration 10",
+    "listener vehicle_angular_velocity 10",
+    "listener vehicle_attitude 5",
+    "listener estimator_selector_status 3",
+    "listener vehicle_air_data 10",
+    "listener vehicle_magnetometer 10",
+    "listener vehicle_gps_position 10",
+    "listener differential_pressure 3",
+    "listener airspeed_validated 3",
+    "listener estimator_status 5",
+    "listener estimator_status_flags 5",
+    "listener estimator_sensor_bias 5",
+    "listener vehicle_local_position 5",
+    "listener vehicle_global_position 5",
+    "ekf2 status",
+    "sensors status",
+    "px4-sensors status",
+    "commander status",
+    "commander check",
+    "mavlink status",
+    "work_queue status",
+    "uorb top",
+    "uorb top -1 sensor_baro",
+    "uorb top -1 vehicle_gps_position",
+    "uorb status",
+)
+PX4_GATE_READOUT = (
+    ("1", "IMU present", "sensor_accel, sensor_gyro"),
+    ("2", "IMU integrated/selected", "vehicle_imu, vehicle_imu_status, estimator_selector_status"),
+    ("3", "IMU validator/current preflight", "sensors status, px4-sensors status, commander check"),
+    ("4", "Timestamp/lockstep stall", "ekf2 status, vehicle_imu timestamps, mavlink status"),
+    ("5", "Baro aiding", "vehicle_air_data, sensor_baro, uorb top -1 sensor_baro"),
+    ("6", "Mag/yaw aiding", "vehicle_magnetometer, sensor_mag, SYS_HAS_MAG, EKF2_MAG_TYPE"),
+    ("7", "GPS present/valid", "vehicle_gps_position, sensor_gps, uorb top -1 vehicle_gps_position"),
+    ("8", "GPS origin/aiding init", "estimator_status_flags, vehicle_local_position"),
+    ("9", "EKF2 updates", "ekf2 status, estimator_status, estimator_sensor_bias"),
+    ("10", "Global position emitted", "vehicle_global_position"),
+)
+
 
 @dataclass
 class LogEvidence:
@@ -98,6 +157,18 @@ class ParsedLog:
 class TransportEventRecord:
     line_number: int
     event: dict[str, object]
+
+
+@dataclass
+class PX4Capture:
+    label: str
+    offset_sec: int
+    source_path: Path
+    output_path: Path
+    scheduled_utc: str
+    started_utc: str
+    finished_utc: str
+    command_set: str
 
 
 def sha256_file(path: Path) -> str | None:
@@ -391,12 +462,208 @@ def metric_line(label: str, value: object) -> str:
     return f"- {label}: {value if value not in (None, '') else 'not captured'}"
 
 
+def render_px4_command_sheet() -> str:
+    lines = [
+        "# PX4 t0/t5/t30 EKF2 Gate Capture Sheet",
+        "",
+        "This sheet is read-only. Do not run `param set`, change PX4 params, restart modules, or change px4xplane config while collecting this evidence.",
+        "",
+        "## Timing",
+        "- `t0`: immediately after PX4 connects to px4xplane for the current session.",
+        "- `t5`: five seconds after `t0`.",
+        "- `t30`: thirty seconds after `t0`.",
+        "",
+        "Each capture file must include in-band UTC metadata headers. File modification time is not authoritative.",
+        "",
+        "Suggested file names:",
+        "- `px4_t0.txt`",
+        "- `px4_t5.txt`",
+        "- `px4_t30.txt`",
+        "",
+        "## Commands",
+        "",
+        "Run this full command set at each offset:",
+        "",
+        "```text",
+    ]
+    lines.extend(PX4_CAPTURE_COMMANDS)
+    lines.extend(
+        [
+            "```",
+            "",
+            "## Gate Readout Order",
+            "",
+            "| Gate | Signal | Capture evidence |",
+            "|---|---|---|",
+        ]
+    )
+    for gate, signal, evidence in PX4_GATE_READOUT:
+        lines.append(f"| {gate} | {signal} | {evidence} |")
+    lines.extend(
+        [
+            "",
+            "## Bundle Ingest",
+            "",
+            "After the run, pass the pasted files to the bundle:",
+            "",
+            "```bash",
+            "python3 scripts/hitl_diagnostic_bundle.py \\",
+            "  --px4-capture-dir /path/to/px4-timed-diagnostics-latest",
+            "",
+            "# Or pass files explicitly:",
+            "python3 scripts/hitl_diagnostic_bundle.py \\",
+            "  --px4-output-t0 /path/to/px4_t0.txt \\",
+            "  --px4-output-t5 /path/to/px4_t5.txt \\",
+            "  --px4-output-t30 /path/to/px4_t30.txt",
+            "```",
+            "",
+            "A validator or failsafe `YES` line without one of these offset labels is historical/non-decisive.",
+        ]
+    )
+    return "\n".join(lines) + "\n"
+
+
+def parse_px4_capture_headers(text: str) -> dict[str, str]:
+    headers: dict[str, str] = {}
+    for line in text.splitlines():
+        if not line.startswith("# px4_capture_"):
+            continue
+        key, _, value = line[2:].partition(":")
+        if key and value:
+            headers[key.strip()] = value.strip()
+    return headers
+
+
+def iso_like_utc(value: str) -> bool:
+    if re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$", value):
+        return True
+    if re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?\+00:00$", value):
+        return True
+    if value.startswith("unix_ms:") and value.removeprefix("unix_ms:").isdigit():
+        return True
+    return False
+
+
+def px4_capture_inputs_from_dir(capture_dir: Path | None) -> dict[str, Path | None]:
+    if not capture_dir:
+        return {}
+    return {label: capture_dir / f"px4_{label}.txt" for label, _ in PX4_CAPTURE_OFFSETS}
+
+
+def load_px4_capture_manifest(capture_dir: Path | None) -> dict[str, object]:
+    if not capture_dir:
+        return {}
+    manifest_path = capture_dir / "timed_capture_manifest.json"
+    if not manifest_path.is_file():
+        return {}
+    try:
+        parsed = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {"manifest_error": f"invalid JSON in {manifest_path}"}
+    return parsed if isinstance(parsed, dict) else {"manifest_error": f"unexpected manifest shape in {manifest_path}"}
+
+
+def validate_capture_metadata(label: str, offset_sec: int, source_path: Path, text: str) -> dict[str, str]:
+    headers = parse_px4_capture_headers(text)
+    required = {
+        "px4_capture_offset": label,
+        "px4_capture_offset_sec": str(offset_sec),
+        "px4_capture_scheduled_utc": None,
+        "px4_capture_started_utc": None,
+        "px4_capture_finished_utc": None,
+    }
+    missing = [key for key in required if not headers.get(key)]
+    if missing:
+        raise ValueError(f"{source_path} missing required in-band capture metadata: {', '.join(missing)}")
+
+    for key, expected in required.items():
+        if expected is not None and headers.get(key) != expected:
+            raise ValueError(f"{source_path} has {key}={headers.get(key)!r}, expected {expected!r}")
+
+    for key in (
+        "px4_capture_scheduled_utc",
+        "px4_capture_started_utc",
+        "px4_capture_finished_utc",
+    ):
+        value = headers[key]
+        if not iso_like_utc(value):
+            raise ValueError(f"{source_path} has non-UTC-looking {key}: {value!r}")
+
+    return headers
+
+
+def assert_capture_monotonicity(captures: list[PX4Capture]) -> None:
+    if len(captures) < 2:
+        return
+    ordered_labels = [label for label, _ in PX4_CAPTURE_OFFSETS]
+    captures_by_label = {capture.label: capture for capture in captures}
+    ordered = [captures_by_label[label] for label in ordered_labels if label in captures_by_label]
+    for previous, current in zip(ordered, ordered[1:]):
+        if previous.scheduled_utc >= current.scheduled_utc:
+            raise ValueError(
+                "PX4 capture timestamps are not monotonic: "
+                f"{previous.label}@{previous.scheduled_utc} !< {current.label}@{current.scheduled_utc}"
+            )
+
+
+def write_px4_captures(output_dir: Path, capture_inputs: dict[str, Path | None]) -> list[PX4Capture]:
+    captures: list[PX4Capture] = []
+    for label, offset_sec in PX4_CAPTURE_OFFSETS:
+        source_path = capture_inputs.get(label)
+        if not source_path or not source_path.is_file():
+            continue
+
+        source_text = read_text_if_exists(source_path)
+        headers = validate_capture_metadata(label, offset_sec, source_path, source_text)
+        output_path = output_dir / f"px4_{label}.txt"
+        output_path.write_text(source_text.rstrip("\n") + "\n", encoding="utf-8")
+        captures.append(
+            PX4Capture(
+                label=label,
+                offset_sec=offset_sec,
+                source_path=source_path,
+                output_path=output_path,
+                scheduled_utc=headers["px4_capture_scheduled_utc"],
+                started_utc=headers["px4_capture_started_utc"],
+                finished_utc=headers["px4_capture_finished_utc"],
+                command_set=headers.get("px4_capture_command_set", "unknown"),
+            )
+        )
+    assert_capture_monotonicity(captures)
+    return captures
+
+
+def render_px4_capture_diff(captures: list[PX4Capture]) -> str:
+    if len(captures) < 2:
+        return "Need at least two offset captures to render a PX4 capture diff.\n"
+
+    sections: list[str] = []
+    for previous, current in zip(captures, captures[1:]):
+        previous_lines = previous.output_path.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
+        current_lines = current.output_path.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
+        sections.append(f"# Diff {previous.label} -> {current.label}\n")
+        sections.append(
+            "".join(
+                difflib.unified_diff(
+                    previous_lines,
+                    current_lines,
+                    fromfile=previous.output_path.name,
+                    tofile=current.output_path.name,
+                )
+            )
+            or "(no textual differences)\n"
+        )
+        sections.append("\n")
+    return "".join(sections)
+
+
 def render_summary(
     *,
     output_dir: Path,
     xplane_log: Path,
     installed_config: Path,
     px4_output: Path | None,
+    px4_captures: list[PX4Capture],
     evidence: LogEvidence,
     historical_evidence: LogEvidence,
     boundary: SessionBoundary,
@@ -472,6 +739,32 @@ def render_summary(
         metric_line("Historical transport/drop alerts", len(historical_evidence.transport_alerts)),
         metric_line("Historical diag version mismatches", len(historical_evidence.version_mismatch)),
         "",
+        "## PX4 Offset Capture Evidence",
+        metric_line("Legacy undated PX4 output", px4_output or "not provided"),
+        metric_line(
+            "Offset captures",
+            ", ".join(
+                f"{capture.label}@scheduled:{capture.scheduled_utc}/started:{capture.started_utc}/finished:{capture.finished_utc}"
+                for capture in px4_captures
+            ),
+        ),
+        metric_line(
+            "Capture command sets",
+            ", ".join(f"{capture.label}:{capture.command_set}" for capture in px4_captures),
+        ),
+        metric_line(
+            "Capture files",
+            ", ".join(capture.output_path.name for capture in px4_captures),
+        ),
+        "- Validator/failsafe `YES` lines without `t0`/`t5`/`t30` offset labels are historical/non-decisive.",
+        "- Use `px4_capture_diff.txt` to separate transient startup failures from persistent failures.",
+        "- Use `px4_command_sheet.md` for the full read-only command set.",
+        "",
+        "## EKF2 Gate Readout Order",
+        "| Gate | Signal | Capture evidence |",
+        "|---|---|---|",
+        *(f"| {gate} | {signal} | {evidence} |" for gate, signal, evidence in PX4_GATE_READOUT),
+        "",
         "## Decision Rules",
         "- render FPS approximately callback Hz approximately HIL_SENSOR send Hz approximately PX4 IMU rate approximately 24: frame/callback-bound operation; do not assume scheduler fix first.",
         "- callback Hz greater than HIL_SENSOR send Hz: scheduler gating/throttle issue.",
@@ -499,15 +792,7 @@ def render_summary(
         "",
         "## PX4 Commands To Run And Paste",
         "```text",
-        "param show IMU_INTEG_RATE",
-        "listener vehicle_imu 10",
-        "listener vehicle_acceleration 10",
-        "listener vehicle_angular_velocity 10",
-        "listener estimator_status 5",
-        "listener estimator_innovations 5",
-        "listener vehicle_global_position 5",
-        "uorb top",
-        "ekf2 status",
+        *PX4_CAPTURE_COMMANDS,
         "```",
         "",
         "## Files",
@@ -524,18 +809,40 @@ def render_summary(
         "- historical/version_mismatch.log",
         "- installed_config.ini",
         "- installed_vs_repo_config.diff",
+        "- px4_command_sheet.md",
+        "- timed_capture_manifest.json, when provided by the launcher",
+        "- px4_t0.txt, px4_t5.txt, px4_t30.txt when provided",
+        "- px4_capture_diff.txt",
         "- px4_output.txt, when provided",
     ]
     return "\n".join(lines) + "\n"
 
 
-def write_bundle(output_dir: Path, xplane_log: Path, installed_config: Path, px4_output: Path | None) -> Path:
+def write_bundle(
+    output_dir: Path,
+    xplane_log: Path,
+    installed_config: Path,
+    px4_output: Path | None,
+    px4_output_t0: Path | None = None,
+    px4_output_t5: Path | None = None,
+    px4_output_t30: Path | None = None,
+    px4_capture_dir: Path | None = None,
+) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     parsed_log = parse_log(xplane_log)
     evidence = parsed_log.current
     historical_evidence = parsed_log.historical
     historical_dir = output_dir / "historical"
     historical_dir.mkdir(parents=True, exist_ok=True)
+    capture_inputs = px4_capture_inputs_from_dir(px4_capture_dir)
+    capture_inputs.update(
+        {
+            "t0": px4_output_t0 or capture_inputs.get("t0"),
+            "t5": px4_output_t5 or capture_inputs.get("t5"),
+            "t30": px4_output_t30 or capture_inputs.get("t30"),
+        }
+    )
+    capture_manifest = load_px4_capture_manifest(px4_capture_dir)
 
     (output_dir / "xplane_px4xplane_excerpts.log").write_text(
         "\n".join(evidence.excerpts) + ("\n" if evidence.excerpts else ""),
@@ -600,6 +907,17 @@ def write_bundle(output_dir: Path, xplane_log: Path, installed_config: Path, px4
         shutil.copy2(xplane_log, output_dir / "Log.txt")
     if px4_output and px4_output.is_file():
         shutil.copy2(px4_output, output_dir / "px4_output.txt")
+    if px4_capture_dir and (px4_capture_dir / "timed_capture_manifest.json").is_file():
+        shutil.copy2(px4_capture_dir / "timed_capture_manifest.json", output_dir / "timed_capture_manifest.json")
+    if capture_manifest:
+        (output_dir / "timed_capture_manifest.normalized.json").write_text(
+            json.dumps(capture_manifest, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+    px4_captures = write_px4_captures(output_dir, capture_inputs)
+    (output_dir / "px4_capture_diff.txt").write_text(render_px4_capture_diff(px4_captures), encoding="utf-8")
+    (output_dir / "px4_command_sheet.md").write_text(render_px4_command_sheet(), encoding="utf-8")
 
     config_diff = unified_config_diff(installed_config)
     (output_dir / "installed_vs_repo_config.diff").write_text(config_diff, encoding="utf-8")
@@ -609,6 +927,7 @@ def write_bundle(output_dir: Path, xplane_log: Path, installed_config: Path, px4
         xplane_log=xplane_log,
         installed_config=installed_config,
         px4_output=px4_output,
+        px4_captures=px4_captures,
         evidence=evidence,
         historical_evidence=historical_evidence,
         boundary=parsed_log.boundary,
@@ -702,6 +1021,9 @@ def run_self_test() -> int:
         sample_log = tmp_path / "Log.txt"
         sample_config = tmp_path / "config.ini"
         sample_px4 = tmp_path / "px4.txt"
+        sample_px4_t0 = tmp_path / "px4_t0.txt"
+        sample_px4_t5 = tmp_path / "px4_t5.txt"
+        sample_px4_t30 = tmp_path / "px4_t30.txt"
         out_dir = tmp_path / "bundle"
 
         v1_rate = goldens["RATE"][0]
@@ -770,6 +1092,27 @@ def run_self_test() -> int:
         )
         sample_config.write_text(REPO_CONFIG.read_text(encoding="utf-8-sig", errors="replace"), encoding="utf-8")
         sample_px4.write_text("param show IMU_INTEG_RATE\n", encoding="utf-8")
+        for label, offset, scheduled, started, finished, body in [
+            ("t0", 0, "2026-06-15T22:15:03Z", "2026-06-15T22:15:03Z", "2026-06-15T22:15:18Z", "commander check\nAccel #0 fail: YES\n"),
+            ("t5", 5, "2026-06-15T22:15:08Z", "2026-06-15T22:15:08Z", "2026-06-15T22:15:23Z", "commander check\nAccel #0 fail: YES\n"),
+            ("t30", 30, "2026-06-15T22:15:33Z", "2026-06-15T22:15:33Z", "2026-06-15T22:15:48Z", "commander check\nAccel #0 fail: NO\n"),
+        ]:
+            (tmp_path / f"px4_{label}.txt").write_text(
+                "\n".join(
+                    [
+                        f"# px4_capture_offset: {label}",
+                        f"# px4_capture_offset_sec: {offset}",
+                        f"# px4_capture_scheduled_utc: {scheduled}",
+                        f"# px4_capture_started_utc: {started}",
+                        f"# px4_capture_finished_utc: {finished}",
+                        "# px4_capture_command_set: launcher-timed-px4-diagnostics-v1",
+                        "",
+                        body.rstrip("\n"),
+                        "",
+                    ]
+                ),
+                encoding="utf-8",
+            )
 
         parsed = parse_log(sample_log)
         evidence = parsed.current
@@ -814,7 +1157,7 @@ def run_self_test() -> int:
             print(f"[FAIL] expected 3 version mismatches total, got {total_mismatch}")
             return 1
 
-        write_bundle(out_dir, sample_log, sample_config, sample_px4)
+        write_bundle(out_dir, sample_log, sample_config, sample_px4, sample_px4_t0, sample_px4_t5, sample_px4_t30)
         summary = (out_dir / "README.md").read_text(encoding="utf-8")
         boundary = json.loads((out_dir / "session_boundary.json").read_text(encoding="utf-8"))
         historical_excerpts = (out_dir / "historical" / "xplane_px4xplane_excerpts.log").read_text(encoding="utf-8")
@@ -823,10 +1166,27 @@ def run_self_test() -> int:
             "Boundary status: complete-session",
             "Current transport_generation: 2",
             "HIL_SENSOR send-rate mean from log: 28.00 Hz",
+            "Offset captures: t0@scheduled:2026-06-15T22:15:03Z",
+            "Capture command sets: t0:launcher-timed-px4-diagnostics-v1",
+            "px4_command_sheet.md",
+            "uorb top -1 sensor_baro",
             "PX4 Commands To Run And Paste",
             "frame/callback-bound operation",
         ]
         missing = [text for text in required if text not in summary]
+        expected_files = [
+            out_dir / "px4_t0.txt",
+            out_dir / "px4_t5.txt",
+            out_dir / "px4_t30.txt",
+            out_dir / "px4_capture_diff.txt",
+            out_dir / "px4_command_sheet.md",
+        ]
+        missing.extend(str(path.name) for path in expected_files if not path.is_file())
+        diff_text = (out_dir / "px4_capture_diff.txt").read_text(encoding="utf-8")
+        if "Diff t0 -> t5" not in diff_text or "Diff t5 -> t30" not in diff_text:
+            missing.append("px4_capture_diff adjacent offsets")
+        if "# px4_capture_offset: t30" not in (out_dir / "px4_t30.txt").read_text(encoding="utf-8"):
+            missing.append("px4_t30 offset header")
         if missing:
             print(f"[FAIL] hitl-diagnostic-bundle-self-test missing: {missing}")
             return 1
@@ -929,6 +1289,14 @@ def main() -> int:
         help="Path to installed px4xplane/64/config.ini.",
     )
     parser.add_argument("--px4-output", type=Path, help="Optional text file containing copied PX4 shell output.")
+    parser.add_argument(
+        "--px4-capture-dir",
+        type=Path,
+        help="Directory containing launcher-generated px4_t0.txt, px4_t5.txt, px4_t30.txt, and timed_capture_manifest.json.",
+    )
+    parser.add_argument("--px4-output-t0", type=Path, help="PX4 shell output captured immediately after connect.")
+    parser.add_argument("--px4-output-t5", type=Path, help="PX4 shell output captured five seconds after t0.")
+    parser.add_argument("--px4-output-t30", type=Path, help="PX4 shell output captured thirty seconds after t0.")
     parser.add_argument("--output-dir", type=Path, help="Directory for the evidence bundle.")
     parser.add_argument("--self-test", action="store_true", help="Run the parser/bundle self-test.")
     args = parser.parse_args()
@@ -938,7 +1306,16 @@ def main() -> int:
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     output_dir = args.output_dir or DEFAULT_OUTPUT_ROOT / f"hitl-cadence-{stamp}"
-    bundle_dir = write_bundle(output_dir, args.xplane_log, args.installed_config, args.px4_output)
+    bundle_dir = write_bundle(
+        output_dir,
+        args.xplane_log,
+        args.installed_config,
+        args.px4_output,
+        args.px4_output_t0,
+        args.px4_output_t5,
+        args.px4_output_t30,
+        args.px4_capture_dir,
+    )
     print(f"Created HITL cadence evidence bundle: {bundle_dir}")
     if not args.xplane_log.is_file():
         print(f"[WARN] X-Plane log not found: {args.xplane_log}")
