@@ -381,26 +381,28 @@ Decision order:
 #### Hard precondition: EKF2 must be running before any poisoning verdict
 
 **Before reading the verdict table, check the EKF2 accel/IMU update count from `ekf2 status`
-at t5 and t30 in every variant.** If that update count is **0 across ALL variants** (Baseline,
-Run A, and Run B), EKF2 never consumed the accelerometer stream, so nothing in this run can
-poison the estimator and no accel-value comparison is estimator-meaningful.
+at t5 and t30 in every variant.** If that update count is **0 across ALL variants/sessions**
+(Baseline, Run A, Run B, cross-session session 1, and cross-session session 2), EKF2 never
+consumed the accelerometer stream, so nothing in this run can poison the estimator and no
+accel-value comparison is estimator-meaningful.
 
 In that case the verdict is forced to **INCONCLUSIVE / NO_EKF2**, regardless of any
 `[ACCEL_S5_FINAL]` Z-band or validator-line differences between variants. **No row in the
-table below may conclude poisoning (CONFIRMED, SUSPECTED, or VALUE-POISONING SIGNAL) while the
-EKF2 accel/IMU update count is 0 everywhere.** First fix why EKF2 is not updating (e.g. the
-HITL cadence / lockstep issue in [HITL_DIAGNOSTICS.md](HITL_DIAGNOSTICS.md)) and re-run the
-protocol; only then is the table valid.
+table below may conclude poisoning (POISONING CONFIRMED, POISONING SUSPECTED, VALUE-POISONING
+SIGNAL, or CROSS-SESSION POISONING CONFIRMED) while the EKF2 accel/IMU update count is 0 across
+all variants/sessions.** First fix why EKF2 is not updating (e.g. the HITL cadence / lockstep
+issue in [HITL_DIAGNOSTICS.md](HITL_DIAGNOSTICS.md)) and re-run the protocol; only then is the
+table valid.
 
-The EKF2 update count is non-zero in at least one variant is therefore a **gate** on the
-entire scoring table. Record the per-variant EKF2 accel/IMU update count alongside every
-verdict.
+A non-zero EKF2 update count in at least one variant/session is therefore a **gate** on the
+entire scoring table. Record the per-variant/per-session EKF2 accel/IMU update count alongside
+every verdict.
 
 Use this table for the PR/issue verdict (only after the EKF2 gate above passes):
 
 | Observation | Interpretation | Verdict |
 |---|---|---|
-| **EKF2 accel/IMU update count is 0 in ALL variants at t5 and t30** | EKF2 never ingested accel; no estimator-level poisoning is possible and no comparison is valid | **INCONCLUSIVE / NO_EKF2** (overrides every other row — never conclude poisoning) |
+| **EKF2 accel/IMU update count is 0 in ALL variants/sessions at t5 and t30** | EKF2 never ingested accel; no estimator-level poisoning is possible and no comparison is valid | **INCONCLUSIVE / NO_EKF2** (overrides every other row — never conclude poisoning) |
 | Baseline shows `Accel #0 fail` or validator failsafe YES at t5, while **Run B** is clean at t5/t30 | Calibration transform poisons validator during startup (primary signal) | POISONING CONFIRMED |
 | Baseline fails but only **Run A** (not Run B) is clean | Weaker, collection-window-specific signal; corroborating only — do not declare poisoning on Run A alone | POISONING SUSPECTED (needs Run B) |
 | Baseline and **Run B** show the same validator failure | Failure is upstream of the calibration transform, such as raw values, sign, timing, or cadence | POISONING DISPROVED for this symptom |
@@ -421,9 +423,12 @@ Attach or paste:
 - X-Plane log excerpts filtered to the current session boundary, including the
   `[TRANSPORT_EVENT]` `client_connected` / `session_reset` lines (with `generation`) and the
   per-variant runtime toggle-proof lines.
-- t0/t5/t30 PX4 captures for every variant, including the `ekf2 status` accel/IMU update count.
-- The per-variant EKF2 gate result (PASS if update count > 0 in at least one variant; else
-  NO_EKF2).
+- t0/t5/t30 PX4 captures for every variant and every cross-session session, including the
+  `ekf2 status` accel/IMU update count.
+- The per-variant/per-session EKF2 gate result (PASS if update count > 0 in at least one
+  variant/session; else NO_EKF2). Any CROSS-SESSION POISONING verdict additionally requires the
+  EKF2 accel/IMU update count to be > 0 in the specific cross-session session(s) cited to
+  support that verdict.
 - A short verdict using the scoring table.
 
 Keep issue #16 open after attaching the evidence so reviewers can compare the four variants.
