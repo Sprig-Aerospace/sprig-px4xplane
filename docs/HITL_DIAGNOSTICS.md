@@ -46,26 +46,70 @@ If the files are elsewhere:
 python3 scripts/hitl_diagnostic_bundle.py \
   --xplane-log "/path/to/Log.txt" \
   --installed-config "/path/to/px4xplane/64/config.ini" \
-  --px4-output "/path/to/px4-shell-output.txt"
+  --px4-output-t0 "/path/to/px4_t0.txt" \
+  --px4-output-t5 "/path/to/px4_t5.txt" \
+  --px4-output-t30 "/path/to/px4_t30.txt"
 ```
 
 The bundle is written under `build/diagnostics/hitl-cadence-*`.
 
 ## PX4 Commands
 
-Run these in the PX4 shell during or immediately after the HITL attempt and paste the output into the issue or into a text file passed with `--px4-output`:
+Run the full command set in the PX4 shell three times: immediately after PX4 connects (`t0`), five
+seconds later (`t5`), and thirty seconds later (`t30`). Save the outputs as `px4_t0.txt`,
+`px4_t5.txt`, and `px4_t30.txt`, preserving the file modification times so the bundle can stamp
+each capture with a host wall clock.
 
 ```text
 param show IMU_INTEG_RATE
+param show EKF2_PREDICT_US
+param show EKF2_EN
+param show SYS_MC_EST_GROUP
+param show SYS_HAS_MAG
+param show EKF2_MAG_TYPE
+param show EKF2_MULTI_IMU
+param show SENS_IMU_MODE
+param show SENS_EN_GPSSIM
+param show SENS_EN_BAROSIM
+param show SENS_EN_MAGSIM
+listener sensor_accel 10
+listener sensor_gyro 10
+listener sensor_baro 5
+listener sensor_mag 5
+listener sensor_gps 5
 listener vehicle_imu 10
+listener vehicle_imu_status 3
 listener vehicle_acceleration 10
 listener vehicle_angular_velocity 10
+listener vehicle_attitude 5
+listener estimator_selector_status 3
+listener vehicle_air_data 10
+listener vehicle_magnetometer 10
+listener vehicle_gps_position 10
+listener differential_pressure 3
+listener airspeed_validated 3
 listener estimator_status 5
-listener estimator_innovations 5
+listener estimator_status_flags 5
+listener estimator_sensor_bias 5
+listener vehicle_local_position 5
 listener vehicle_global_position 5
-uorb top
 ekf2 status
+sensors status
+px4-sensors status
+commander status
+commander check
+mavlink status
+work_queue status
+uorb top
+uorb top -1 sensor_baro
+uorb top -1 vehicle_gps_position
+uorb status
 ```
+
+The bundle also writes `px4_command_sheet.md` with this read-only command list. Do not use
+`uorb status <topic>`; PX4 expects `uorb top -1 <topic>` for topic-filtered single-shot rate views.
+The legacy `--px4-output` paste is still accepted for compatibility, but any validator/failsafe
+`YES` line without a `t0`/`t5`/`t30` offset is historical/non-decisive.
 
 ## Human Checklist
 
