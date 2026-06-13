@@ -72,6 +72,9 @@ public:
         uint64_t simulation_clock_usec = 1000000;
         uint64_t last_delta_usec = 0;
         int64_t drift_usec = 0;
+        bool drift_measured = false;
+        uint64_t wall_time_usec = 0;
+        uint32_t generation = 0;
         uint64_t sub_frame_branch_count = 0;
         uint64_t normal_delta_branch_count = 0;
         uint64_t max_delta_cap_branch_count = 0;
@@ -106,6 +109,11 @@ public:
     static void noteMessageTimestamp(MessageKind kind, uint64_t timestamp_usec);
 
     /**
+     * @brief Set the current PX4 session generation for diagnostic log lines.
+     */
+    static void setDiagnosticsGeneration(uint32_t generation);
+
+    /**
      * @brief Reset all timing state.
      *
      * Call this on disconnect/reconnect to ensure clean timestamp
@@ -127,6 +135,13 @@ public:
      */
     static Diagnostics getDiagnostics();
 
+    /**
+     * @brief Estimate a percentile from the fixed diagnostic histogram buckets.
+     *
+     * Returns the upper bound of the bucket containing the percentile.
+     */
+    static uint64_t estimatePercentileUsec(const DeltaStats& stats, double percentile);
+
 private:
     // High-resolution clock is diagnostic only; it never drives HIL timestamps.
     using SteadyClock = std::chrono::steady_clock;
@@ -138,12 +153,15 @@ private:
     static bool s_initialized;
     static bool s_hasAdvancedThisSession;
     static TimePoint s_baseTimePoint;
+    static uint64_t s_sessionStartWallUsec;
     static uint64_t s_simulationClockUsec;
+    static uint32_t s_generation;
 
     static Diagnostics s_diagnostics;
 
     static void initializeIfNeeded();
     static void resetDiagnostics();
+    static void updateDriftMeasurement();
 };
 
 #endif // TIMESTAMPPROVIDER_H

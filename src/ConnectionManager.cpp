@@ -221,6 +221,8 @@ std::string buildTransportSessionEventJson(
 
     std::ostringstream json;
     json << "{"
+         << "\"diag_version\":1,"
+         << "\"wall_time_usec\":" << nowUsec << ","
          << "\"event\":\"" << escapeJson(eventType) << "\","
          << "\"generation\":" << g_transportSessionState.generation << ","
          << "\"reset_cause\":\"" << escapeJson(g_transportSessionState.resetCause) << "\","

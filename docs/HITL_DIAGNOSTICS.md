@@ -9,9 +9,9 @@ This is an evidence gate before scheduler changes. Do not use this workflow to c
 - effective `config_name`
 - effective `mavlink_sensor_rate_hz`, `mavlink_gps_rate_hz`, `mavlink_state_rate_hz`, and `mavlink_rc_rate_hz`
 - `px4xplane` excerpts from X-Plane `Log.txt`
-- `HIL_SENSOR` send-rate lines when `debug_log_sensor_timing = true`
+- versioned `[RATE]` send-rate lines with `generation`, `wall_time_usec`, count-over-wall-time `rate_hz`, and HIL_SENSOR dt p50/p95/max buckets
 - callback/FPS timing from structured `[TRANSPORT_EVENT]` lines
-- TimestampProvider drift/delta lines when `debug_log_sensor_timing = true`
+- TimestampProvider drift/delta lines with `generation`, `wall_time_usec`, and wall-clock-referenced `drift_ms` when `debug_log_sensor_timing = true`
 - transport/drop evidence including `send_backpressure`, `send_retry_limit`, `dropping this frame`, `send failure`, and `broken pipe`
 - exact PX4 commands for the operator to run and paste into the bundle notes
 
@@ -72,6 +72,7 @@ ekf2 status
 - installed plugin path
 - installed `config.ini` hash/diff vs repo
 - X-Plane render FPS mean/min, if available
+- HIL_SENSOR count-over-wall-time rate and dt p50/p95/max buckets
 - whether X-Plane was paused, backgrounded, in menu, FPS-limited, or graphics-limited
 - PX4 effective `IMU_INTEG_RATE` after clamp
 - PX4 observed rates for `vehicle_imu`, `vehicle_acceleration`, and `vehicle_angular_velocity`

@@ -33,11 +33,10 @@ PX4XPLANE_PATTERNS = (
 )
 
 TRANSPORT_EVENT_RE = re.compile(r"\[TRANSPORT_EVENT\]\s+({.*})")
-HIL_SENSOR_RATE_RE = re.compile(
-    r"HIL_SENSOR:\s+(?P<count>\d+)\s+msgs,\s+avg\s+(?P<rate>[0-9.]+)\s+Hz\s+\(target\s+(?P<target>\d+)\s+Hz\)"
-)
-EFFECTIVE_RATE_RE = re.compile(
-    r"\[RATE\].*achieved Hz SENSOR:(?P<sensor>[0-9.]+).*X-Plane:(?P<xplane_fps>[0-9.]+) FPS"
+RATE_RE = re.compile(
+    r"\[RATE\]\s+diag_version=(?P<diag_version>\d+)\s+generation=(?P<generation>\d+)\s+"
+    r"wall_time_usec=(?P<wall_time_usec>\d+).*?\s+rate_hz=(?P<sensor>[0-9.]+)\s+"
+    r"target_hz=(?P<target>\d+)\s+estimated_fps=(?P<xplane_fps>[0-9.]+)"
 )
 MESSAGE_PERIOD_RE = re.compile(
     r"Message periods initialized - SENSOR:(?P<sensor_period>[0-9.]+)s \((?P<sensor>\d+)Hz\) "
@@ -142,10 +141,7 @@ def parse_log(path: Path) -> LogEvidence:
                 except json.JSONDecodeError:
                     evidence.transport_alerts.append(line)
 
-            if match := HIL_SENSOR_RATE_RE.search(line):
-                evidence.hil_sensor_rates_hz.append(float(match.group("rate")))
-
-            if match := EFFECTIVE_RATE_RE.search(line):
+            if match := RATE_RE.search(line):
                 evidence.hil_sensor_rates_hz.append(float(match.group("sensor")))
                 evidence.estimated_fps.append(float(match.group("xplane_fps")))
 
@@ -367,10 +363,9 @@ def run_self_test() -> int:
                     "px4xplane: MAVLink rates - SENSOR:200Hz GPS:10Hz STATE:50Hz RC:50Hz",
                     "px4xplane: Message periods initialized - SENSOR:0.0050s (200Hz) GPS:0.1000s (10Hz) STATE:0.0200s (50Hz) RC:0.0200s (50Hz)",
                     "px4xplane: Config Name: Alia250",
-                    "px4xplane: [20.0s] HIL_SENSOR: 1000 msgs, avg 24.3 Hz (target 200 Hz)",
-                    "px4xplane: [RATE] target Hz SENSOR:60 GPS:5 STATE:20 RC:20; achieved Hz SENSOR:26.5 GPS:4.8 STATE:13.9 RC:13.9; X-Plane:52.3 FPS; policy=clamp+warn/no-catch-up/no-auto-degrade",
-                    'px4xplane: [TRANSPORT_EVENT] {"event":"client_connected","estimated_fps":24.6,"flight_loop_counter":42}',
-                    "px4xplane: [TIMESTAMP] t=20.0s, drift=+1.000ms, avg_delta=40.65ms",
+                    "px4xplane: [RATE] diag_version=1 generation=2 wall_time_usec=123456000 sim_time=20.0s HIL_SENSOR window_msgs=1000 total_msgs=1000 wall_window_sec=40.000 rate_hz=25.00 target_hz=60 estimated_fps=52.3 paused=0 dt_p50_bucket_usec=45000 dt_p95_bucket_usec=60000 dt_max_usec=61000",
+                    'px4xplane: [TRANSPORT_EVENT] {"diag_version":1,"wall_time_usec":123456100,"event":"client_connected","generation":2,"estimated_fps":24.6,"flight_loop_counter":42}',
+                    "px4xplane: [TIMESTAMP] diag_version=1 generation=2 wall_time_usec=123456200 event=clock_advance branch=normal-delta raw_flight=20.000000 delta_sec=0.040000 step_clock_sec=21.000000 last_dt_usec=40000 capped=0 drift_ms=+1.000",
                     "px4xplane: Send backpressure from PX4 client; dropping this frame (count=1).",
                 ]
             )
@@ -383,7 +378,7 @@ def run_self_test() -> int:
         write_bundle(out_dir, sample_log, sample_config, sample_px4)
         summary = (out_dir / "README.md").read_text(encoding="utf-8")
         required = [
-            "HIL_SENSOR send-rate mean from log: 25.40 Hz",
+            "HIL_SENSOR send-rate mean from log: 25.00 Hz",
             "Estimated callback/FPS mean from log: 38.45 Hz",
             "PX4 Commands To Run And Paste",
             "frame/callback-bound operation",

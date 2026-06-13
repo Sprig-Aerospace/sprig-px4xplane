@@ -16,6 +16,7 @@
 #include "ConnectionManager.h"
 #include "ConfigManager.h"
 #include "TimestampProvider.h"
+#include "TimeManager.h"
 #include <algorithm>
 
 
@@ -523,7 +524,8 @@ static double lastGpsSendTime = -1.0e6;
 static double lastStateQuatSendTime = -1.0e6;
 static double lastRcSendTime = -1.0e6;
 static int sensorMessageCount = 0;
-static float sensorRateSum = 0.0f;
+static int sensorRateWindowCount = 0;
+static uint64_t sensorRateWindowStartUsec = 0;
 
 float lastFlightTime = 0.0f;
 
@@ -536,7 +538,8 @@ void resetFlightLoopTimers() {
 	lastRcSendTime = -1.0e6;
 	lastFlightTime = 0.0f;
 	sensorMessageCount = 0;
-	sensorRateSum = 0.0f;
+	sensorRateWindowCount = 0;
+	sensorRateWindowStartUsec = TimeManager::getCurrentTimeUsec();
 	XPLMDebugString("px4xplane: Flight loop timers reset; next PX4 session will send frames immediately\n");
 }
 
@@ -623,27 +626,48 @@ float MyFlightLoopCallback(float inElapsedSinceLastCall, float inElapsedTimeSinc
 		if (!ConnectionManager::isConnected()) return -1.0f;
 
 		sensorMessageCount++;
-
-		double actualDt_sec = currentSimTime - lastSensorSendTime;
-		if (actualDt_sec > 0.0) {
-			float actualRate = static_cast<float>(1.0 / actualDt_sec);
-			sensorRateSum += actualRate;
+		sensorRateWindowCount++;
+		const uint64_t wallNowUsec = TimeManager::getCurrentTimeUsec();
+		if (sensorRateWindowStartUsec == 0) {
+			sensorRateWindowStartUsec = wallNowUsec;
 		}
 
 		// Compact HITL evidence for launcher diagnostics; verbose sensor values stay debug-gated.
 		if (sensorMessageCount % 1000 == 0) {
-			float avgRate = sensorRateSum / 1000.0f;
+			const double wallWindowSec = (wallNowUsec > sensorRateWindowStartUsec)
+				? static_cast<double>(wallNowUsec - sensorRateWindowStartUsec) / 1e6
+				: 0.0;
+			const double wallRateHz = (wallWindowSec > 0.0)
+				? static_cast<double>(sensorRateWindowCount) / wallWindowSec
+				: 0.0;
+			const auto diagnostics = TimestampProvider::getDiagnostics();
+			const auto& sensorStats = diagnostics.message_stats[static_cast<size_t>(TimestampProvider::MessageKind::HIL_SENSOR)];
+			const uint64_t sensorP50Usec = TimestampProvider::estimatePercentileUsec(sensorStats, 50.0);
+			const uint64_t sensorP95Usec = TimestampProvider::estimatePercentileUsec(sensorStats, 95.0);
 			XPLMDataRef frameRateRef = XPLMFindDataRef("sim/operation/misc/frame_rate_period");
 			float frameRatePeriod = frameRateRef ? XPLMGetDataf(frameRateRef) : 0.0f;
 			float estimatedFps = (frameRatePeriod > 0.0f) ? (1.0f / frameRatePeriod) : 0.0f;
 			XPLMDataRef pausedRef = XPLMFindDataRef("sim/time/paused");
 			int paused = pausedRef ? XPLMGetDatai(pausedRef) : -1;
-			char buf[320];
+			char buf[640];
 			snprintf(buf, sizeof(buf),
-				"px4xplane: [RATE] sim_time=%.1fs HIL_SENSOR msgs=%d avg=%.1fHz target=%dHz estimated_fps=%.1f paused=%d\n",
-				currentSimTime, sensorMessageCount, avgRate, ConfigManager::mavlink_sensor_rate_hz, estimatedFps, paused);
+				"px4xplane: [RATE] diag_version=1 generation=%u wall_time_usec=%llu sim_time=%.1fs HIL_SENSOR window_msgs=%d total_msgs=%d wall_window_sec=%.3f rate_hz=%.2f target_hz=%d estimated_fps=%.1f paused=%d dt_p50_bucket_usec=%llu dt_p95_bucket_usec=%llu dt_max_usec=%llu\n",
+				MAVLinkManager::getSessionResetGeneration(),
+				(unsigned long long)wallNowUsec,
+				currentSimTime,
+				sensorRateWindowCount,
+				sensorMessageCount,
+				wallWindowSec,
+				wallRateHz,
+				ConfigManager::mavlink_sensor_rate_hz,
+				estimatedFps,
+				paused,
+				(unsigned long long)sensorP50Usec,
+				(unsigned long long)sensorP95Usec,
+				(unsigned long long)sensorStats.max_delta_usec);
 			XPLMDebugString(buf);
-			sensorRateSum = 0.0f;
+			sensorRateWindowCount = 0;
+			sensorRateWindowStartUsec = wallNowUsec;
 		}
 
 		lastSensorSendTime = currentSimTime;
