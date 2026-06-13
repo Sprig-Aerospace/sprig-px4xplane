@@ -16,7 +16,11 @@ bool TimestampProvider::s_hasAdvancedThisSession = false;
 TimestampProvider::TimePoint TimestampProvider::s_baseTimePoint;
 uint64_t TimestampProvider::s_sessionStartWallUsec = 0;
 uint64_t TimestampProvider::s_simulationClockUsec = TimestampProvider::BASE_OFFSET_USEC;
-uint32_t TimestampProvider::s_generation = 0;
+// Initial session generation must match MAVLinkManager::g_sessionResetGeneration's
+// initial value (1) so the [TIMESTAMP] grammar reports the same per-session
+// generation as [RATE]/[TIMESTAMP_SUMMARY] before the first MAVLinkManager::reset().
+// After reset, setDiagnosticsGeneration() is the single authority for both grammars.
+uint32_t TimestampProvider::s_generation = 1;
 TimestampProvider::Diagnostics TimestampProvider::s_diagnostics;
 
 void TimestampProvider::initializeIfNeeded() {
@@ -90,9 +94,17 @@ void TimestampProvider::advanceSimulationClock(double elapsed_since_last_call_se
                 (s_diagnostics.last_branch == AdvanceBranch::MAX_DELTA_CAP) ? "max-delta-cap" :
                 (s_diagnostics.last_branch == AdvanceBranch::NORMAL_DELTA) ? "normal-delta" :
                 "sub-frame/min-delta";
+            // Mirror [TIMESTAMP_SUMMARY] (MAVLinkManager.cpp): never fabricate a
+            // numeric drift when it is unmeasured; emit the literal "unmeasured".
+            char driftBuf[64];
+            if (s_diagnostics.drift_measured) {
+                snprintf(driftBuf, sizeof(driftBuf), "%+.3f", s_diagnostics.drift_usec / 1000.0);
+            } else {
+                snprintf(driftBuf, sizeof(driftBuf), "unmeasured");
+            }
             char buf[512];
             snprintf(buf, sizeof(buf),
-                "px4xplane: [TIMESTAMP] diag_version=1 generation=%u wall_time_usec=%llu event=clock_advance branch=%s raw_flight=%.6f delta_sec=%.6f step_clock_sec=%.6f last_dt_usec=%llu capped=%llu drift_ms=%+.3f\n",
+                "px4xplane: [TIMESTAMP] diag_version=1 generation=%u wall_time_usec=%llu event=clock_advance branch=%s raw_flight=%.6f delta_sec=%.6f step_clock_sec=%.6f last_dt_usec=%llu capped=%llu drift_ms=%s\n",
                 s_generation,
                 (unsigned long long)s_diagnostics.wall_time_usec,
                 branchName,
@@ -101,7 +113,7 @@ void TimestampProvider::advanceSimulationClock(double elapsed_since_last_call_se
                 s_diagnostics.simulation_clock_usec / 1e6,
                 (unsigned long long)s_diagnostics.last_delta_usec,
                 (unsigned long long)s_diagnostics.capped_large_delta_count,
-                s_diagnostics.drift_usec / 1000.0);
+                driftBuf);
             XPLMDebugString(buf);
             lastLogUsec = s_simulationClockUsec;
         }
