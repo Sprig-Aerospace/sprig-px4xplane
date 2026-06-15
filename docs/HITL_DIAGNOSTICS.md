@@ -20,6 +20,8 @@ This is an evidence gate before scheduler changes. Do not use this workflow to c
 - transport/drop evidence including `send_backpressure`, `send_retry_limit`, `dropping this frame`, `send failure`, and `broken pipe`
 - a `session_boundary.json` file identifying the current PX4 session boundary
 - a `historical/` directory containing pre-boundary evidence excluded from current-readiness metrics
+- launcher-generated `px4_t0.txt`, `px4_t5.txt`, `px4_t30.txt`, and `timed_capture_manifest.json`
+  files, when provided
 - exact PX4 commands for the operator to run and paste into the bundle notes
 
 The bundle treats current-readiness evidence as lines at or after the latest `session_reset` for the highest `transport_generation`. Earlier lines are retained under `historical/` for forensics only.
@@ -63,26 +65,87 @@ If the files are elsewhere:
 python3 scripts/hitl_diagnostic_bundle.py \
   --xplane-log "/path/to/Log.txt" \
   --installed-config "/path/to/px4xplane/64/config.ini" \
-  --px4-output "/path/to/px4-shell-output.txt"
+  --px4-capture-dir "/path/to/px4-timed-diagnostics-latest"
 ```
 
 The bundle is written under `build/diagnostics/hitl-cadence-*`.
 
+## Timed PX4 Captures
+
+The launcher starts the `t0` / `t5` / `t30` capture schedule automatically when PX4 is launched.
+The `Collect T Diagnostics` action only prints the already-created files; it does not start or
+reschedule the captures. Each file must carry in-band UTC metadata headers:
+
+```text
+# px4_capture_offset: t0
+# px4_capture_offset_sec: 0
+# px4_capture_scheduled_utc: 2026-06-15T22:15:03Z
+# px4_capture_started_utc: 2026-06-15T22:15:03Z
+# px4_capture_finished_utc: 2026-06-15T22:15:18Z
+```
+
+The bundle rejects offset captures without these headers, and rejects non-monotonic scheduled
+times. File modification time is not authoritative.
+
+If the launcher is unavailable, run the command set below at `t0`, `t5`, and `t30` from one
+continuous PX4 session and add the same metadata headers manually before bundling.
+
 ## PX4 Commands
 
-Run these in the PX4 shell during or immediately after the HITL attempt and paste the output into the issue or into a text file passed with `--px4-output`:
+Run the full command set in the PX4 shell three times: immediately after PX4 connects (`t0`), five
+seconds later (`t5`), and thirty seconds later (`t30`). Save the outputs as `px4_t0.txt`,
+`px4_t5.txt`, and `px4_t30.txt`.
 
 ```text
 param show IMU_INTEG_RATE
+param show EKF2_PREDICT_US
+param show EKF2_EN
+param show SYS_MC_EST_GROUP
+param show SYS_HAS_MAG
+param show EKF2_MAG_TYPE
+param show EKF2_MULTI_IMU
+param show SENS_IMU_MODE
+param show SENS_EN_GPSSIM
+param show SENS_EN_BAROSIM
+param show SENS_EN_MAGSIM
+listener sensor_accel 10
+listener sensor_gyro 10
+listener sensor_baro 5
+listener sensor_mag 5
+listener sensor_gps 5
 listener vehicle_imu 10
+listener vehicle_imu_status 3
 listener vehicle_acceleration 10
 listener vehicle_angular_velocity 10
+listener vehicle_attitude 5
+listener estimator_selector_status 3
+listener vehicle_air_data 10
+listener vehicle_magnetometer 10
+listener vehicle_gps_position 10
+listener differential_pressure 3
+listener airspeed_validated 3
 listener estimator_status 5
-listener estimator_innovations 5
+listener estimator_status_flags 5
+listener estimator_sensor_bias 5
+listener vehicle_local_position 5
 listener vehicle_global_position 5
-uorb top
 ekf2 status
+sensors status
+px4-sensors status
+commander status
+commander check
+mavlink status
+work_queue status
+uorb top
+uorb top -1 sensor_baro
+uorb top -1 vehicle_gps_position
+uorb status
 ```
+
+The bundle also writes `px4_command_sheet.md` with this read-only command list. Do not use
+`uorb status <topic>`; PX4 expects `uorb top -1 <topic>` for topic-filtered single-shot rate views.
+The legacy `--px4-output` paste is still accepted for compatibility, but any validator/failsafe
+`YES` line without a `t0`/`t5`/`t30` offset is historical/non-decisive.
 
 ## Human Checklist
 
