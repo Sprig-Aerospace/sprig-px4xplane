@@ -9,9 +9,14 @@ This is an evidence gate before scheduler changes. Do not use this workflow to c
 - effective `config_name`
 - effective `mavlink_sensor_rate_hz`, `mavlink_gps_rate_hz`, `mavlink_state_rate_hz`, and `mavlink_rc_rate_hz`
 - `px4xplane` excerpts from X-Plane `Log.txt`
-- versioned `[RATE]` send-rate lines with `generation`, `wall_time_usec`, count-over-wall-time `rate_hz`, and HIL_SENSOR dt p50/p95/max buckets
+- versioned `[RATE]` HIL_SENSOR send-rate and `estimated_fps` lines with `generation`,
+  `wall_time_usec`, count-over-wall-time `rate_hz`, and HIL_SENSOR dt p50/p95/max buckets;
+  emitted **unconditionally** every 1000 HIL_SENSOR messages, not gated by
+  `debug_log_sensor_timing`
+- `[TIMESTAMP_SUMMARY]` drift/delta lines with `generation`, `wall_time_usec`, and
+  wall-clock-referenced `drift_ms`; emitted **unconditionally** every 1000 sensor frames, not
+  gated by `debug_log_sensor_timing`
 - callback/FPS timing from structured `[TRANSPORT_EVENT]` lines
-- TimestampProvider drift/delta lines with `generation`, `wall_time_usec`, and wall-clock-referenced `drift_ms` when `debug_log_sensor_timing = true`
 - transport/drop evidence including `send_backpressure`, `send_retry_limit`, `dropping this frame`, `send failure`, and `broken pipe`
 - a `session_boundary.json` file identifying the current PX4 session boundary
 - a `historical/` directory containing pre-boundary evidence excluded from current-readiness metrics
@@ -29,7 +34,13 @@ For the diagnostic run only, set this in the installed plugin config:
 debug_log_sensor_timing = true
 ```
 
+`debug_log_sensor_timing = true` enables the per-frame detailed sensor-timing/drift lines.
+The summary `[RATE]` and `[TIMESTAMP_SUMMARY]` lines are emitted unconditionally every 1000
+frames regardless of this flag (see above), so they are present even on a default config.
+
 Do not change `mavlink_*_rate_hz`, PX4 params, TimestampProvider behavior, TCP behavior, or the HIL_SENSOR scheduler while collecting this evidence.
+
+For the accel-calibration poisoning A/B diagnostic, use [ACCEL_CALIBRATION_AB_PROTOCOL.md](ACCEL_CALIBRATION_AB_PROTOCOL.md). That protocol changes only existing config toggles and requires a fresh PX4 process and a fresh X-Plane process for Baseline, Run A, and Run B.
 
 ## Run The Bundle Script
 
