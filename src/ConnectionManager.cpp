@@ -77,6 +77,8 @@ struct TransportSessionState {
 SessionIoDiagnostics g_sessionIoDiagnostics;
 FlightLoopTimingDiagnostics g_flightLoopTimingDiagnostics;
 TransportSessionState g_transportSessionState;
+ConnectionManager::ReceiveDataCallbackDiagnostics g_lastReceiveDataDiagnostics;
+ConnectionManager::ReceiveDataWindowDiagnostics g_receiveDataWindowDiagnostics;
 
 const char* mavlinkMessageLabel(uint32_t msgid) {
     switch (msgid) {
@@ -837,9 +839,11 @@ void ConnectionManager::sendData(const uint8_t* buffer, int len) {
 
 
 void ConnectionManager::receiveData() {
+    g_lastReceiveDataDiagnostics = ReceiveDataCallbackDiagnostics{};
     if (!connected) return;
+    g_receiveDataWindowDiagnostics.callbacks++;
 
-    uint8_t buffer[256];
+    uint8_t buffer[kReceiveBufferBytes];
     memset(buffer, 0, sizeof(buffer));
 
     // Set up the read set and timeout for select
@@ -852,8 +856,11 @@ void ConnectionManager::receiveData() {
 
     // Use select to check if there is data available to read
     int result = select(newsockfd + 1, &readSet, NULL, NULL, &timeout);
+    g_lastReceiveDataDiagnostics.selectResult = result;
     if (result < 0) {
         int errorCode = getLastSocketError();
+        g_lastReceiveDataDiagnostics.selectErrorCode = errorCode;
+        g_receiveDataWindowDiagnostics.selectErrors++;
         if (isSocketInterrupted(errorCode) || isSendBackpressureError(errorCode)) {
             return;
         }
@@ -861,10 +868,15 @@ void ConnectionManager::receiveData() {
         handleClientDisconnect("select failed while reading PX4: " + getSocketErrorString(), true);
     }
     else if (result > 0 && FD_ISSET(newsockfd, &readSet)) {
+        g_lastReceiveDataDiagnostics.readable = true;
+        g_receiveDataWindowDiagnostics.selectReadable++;
         // There is data available to read
         int bytesReceived = recv(newsockfd, reinterpret_cast<char*>(buffer), sizeof(buffer) - 1, 0);
+        g_lastReceiveDataDiagnostics.bytesReceived = bytesReceived;
         if (bytesReceived < 0) {
             int errorCode = getLastSocketError();
+            g_lastReceiveDataDiagnostics.recvErrorCode = errorCode;
+            g_receiveDataWindowDiagnostics.recvErrors++;
             if (isSocketInterrupted(errorCode) || isSendBackpressureError(errorCode)) {
                 return;
             }
@@ -880,13 +892,64 @@ void ConnectionManager::receiveData() {
 
             // Call MAVLinkManager::receiveHILActuatorControls() function here
             MAVLinkManager::receiveHILActuatorControls(buffer, bytesReceived);
+            MAVLinkManager::ReceiveParseDiagnostics parseDiagnostics =
+                MAVLinkManager::getLastReceiveParseDiagnostics();
+            g_lastReceiveDataDiagnostics.messagesParsed = parseDiagnostics.messagesParsed;
+            g_lastReceiveDataDiagnostics.finalParseState = parseDiagnostics.finalParseState;
+            g_lastReceiveDataDiagnostics.parseIncomplete = parseDiagnostics.parseIncomplete;
+
+            // Second, non-blocking select() purely to observe whether the
+            // socket is readable IMMEDIATELY AFTER this recv(). This is a
+            // "data readable after recv" probe, NOT a drain and NOT proof of
+            // an undrained backlog: newly arrived data is possible between the
+            // recv() and this select(), so a positive result is lockstep-
+            // latency evidence only and never parser corruption. No data is
+            // consumed here (no buffer enlargement, no drain loop).
+            fd_set backlogReadSet;
+            FD_ZERO(&backlogReadSet);
+            FD_SET(newsockfd, &backlogReadSet);
+            struct timeval backlogTimeout;
+            backlogTimeout.tv_sec = 0;
+            backlogTimeout.tv_usec = 0;
+            int backlogResult = select(newsockfd + 1, &backlogReadSet, NULL, NULL, &backlogTimeout);
+            // "Readable immediately after recv" - see postRecvBacklog comment
+            // in ConnectionManager.h. Not an undrained backlog.
+            g_lastReceiveDataDiagnostics.postRecvBacklog =
+                backlogResult > 0 && FD_ISSET(newsockfd, &backlogReadSet);
+
+            g_receiveDataWindowDiagnostics.bytesReceived += static_cast<uint64_t>(bytesReceived);
+            if (static_cast<uint64_t>(bytesReceived) > g_receiveDataWindowDiagnostics.maxBytesReceived) {
+                g_receiveDataWindowDiagnostics.maxBytesReceived = static_cast<uint64_t>(bytesReceived);
+            }
+            g_receiveDataWindowDiagnostics.messagesParsed += static_cast<uint64_t>(parseDiagnostics.messagesParsed);
+            if (parseDiagnostics.parseIncomplete) {
+                g_receiveDataWindowDiagnostics.parseIncompleteCallbacks++;
+            }
+            if (g_lastReceiveDataDiagnostics.postRecvBacklog) {
+                g_receiveDataWindowDiagnostics.postRecvBacklogCallbacks++;
+            }
         }
         else {
+            g_lastReceiveDataDiagnostics.recvZero = true;
+            g_receiveDataWindowDiagnostics.recvZero++;
             logSessionIoSnapshot("receive returned zero bytes", 0);
             emitTransportSessionEvent("receive_zero_bytes", "peer_closed_during_receive");
             handleClientDisconnect("PX4 client closed the TCP connection.", true);
         }
     }
+    else {
+        g_receiveDataWindowDiagnostics.selectNoData++;
+    }
+}
+
+ConnectionManager::ReceiveDataCallbackDiagnostics ConnectionManager::getLastReceiveDataDiagnostics() {
+    return g_lastReceiveDataDiagnostics;
+}
+
+ConnectionManager::ReceiveDataWindowDiagnostics ConnectionManager::consumeReceiveDataWindowDiagnostics() {
+    ReceiveDataWindowDiagnostics diagnostics = g_receiveDataWindowDiagnostics;
+    g_receiveDataWindowDiagnostics = ReceiveDataWindowDiagnostics{};
+    return diagnostics;
 }
 
 void ConnectionManager::noteInboundMavlinkMessage(uint32_t msgid, int payloadLen) {

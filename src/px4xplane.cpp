@@ -534,6 +534,11 @@ float lastFlightTime = 0.0f;
 
 namespace {
 constexpr uint64_t kSlowFrameThresholdUsec = 25000;
+// Derived from the actual recv() buffer capacity (sizeof(buffer)-1 in
+// ConnectionManager::receiveData), NOT a magic literal, so it tracks the
+// real buffer size. recv() reads at most kReceiveBufferBytes-1 bytes, so a
+// returned length at this threshold means the staging buffer filled.
+constexpr int kReceiveFullBufferBytes = ConnectionManager::kReceiveBufferBytes - 1;
 constexpr size_t kDiagSectionCount = 9;
 
 enum class FlightLoopDiagSection : size_t {
@@ -637,6 +642,9 @@ struct FlightLoopDiagnostics {
 	float lastFrameRatePeriod = 0.0f;
 	float maxFrameRatePeriod = 0.0f;
 	int lastPaused = -1;
+	uint64_t slowFramesWithReceiveBacklog = 0;
+	uint64_t slowFramesWithReceiveIncomplete = 0;
+	uint64_t slowFramesWithReceiveFullBuffer = 0;
 
 	void reset() {
 		resetWallUsec = TimeManager::getCurrentTimeUsec();
@@ -652,12 +660,16 @@ struct FlightLoopDiagnostics {
 		lastFrameRatePeriod = 0.0f;
 		maxFrameRatePeriod = 0.0f;
 		lastPaused = -1;
+		slowFramesWithReceiveBacklog = 0;
+		slowFramesWithReceiveIncomplete = 0;
+		slowFramesWithReceiveFullBuffer = 0;
 	}
 };
 
 FlightLoopDiagnostics g_flightLoopDiagnostics;
 
 void resetFlightLoopDiagnostics() {
+	ConnectionManager::consumeReceiveDataWindowDiagnostics();
 	g_flightLoopDiagnostics.reset();
 }
 
@@ -707,6 +719,8 @@ void emitHistogramLine(const char* label, const TimingHistogram& hist, uint64_t 
 
 void emitFlightLoopDiagnostics(double currentSimTime) {
 	char buf[768];
+	const ConnectionManager::ReceiveDataWindowDiagnostics receiveWindow =
+		ConnectionManager::consumeReceiveDataWindowDiagnostics();
 	const uint64_t wallNowUsec = TimeManager::getCurrentTimeUsec();
 	const uint64_t wallElapsedUsec =
 		g_flightLoopDiagnostics.resetWallUsec > 0 ? wallNowUsec - g_flightLoopDiagnostics.resetWallUsec : 0;
@@ -738,6 +752,25 @@ void emitFlightLoopDiagnostics(double currentSimTime) {
 			g_flightLoopDiagnostics.sections[i],
 			g_flightLoopDiagnostics.slowDominantSections[i]);
 	}
+	snprintf(
+		buf,
+		sizeof(buf),
+		"px4xplane: [DIAG_FLIGHTLOOP] receive_callbacks=%llu receive_select_readable=%llu receive_select_no_data=%llu receive_select_errors=%llu receive_recv_errors=%llu receive_zero=%llu receive_bytes=%llu receive_max_bytes=%llu receive_msgs=%llu receive_parse_incomplete=%llu receive_post_backlog=%llu slow_receive_backlog=%llu slow_receive_incomplete=%llu slow_receive_full_buffer=%llu\n",
+		static_cast<unsigned long long>(receiveWindow.callbacks),
+		static_cast<unsigned long long>(receiveWindow.selectReadable),
+		static_cast<unsigned long long>(receiveWindow.selectNoData),
+		static_cast<unsigned long long>(receiveWindow.selectErrors),
+		static_cast<unsigned long long>(receiveWindow.recvErrors),
+		static_cast<unsigned long long>(receiveWindow.recvZero),
+		static_cast<unsigned long long>(receiveWindow.bytesReceived),
+		static_cast<unsigned long long>(receiveWindow.maxBytesReceived),
+		static_cast<unsigned long long>(receiveWindow.messagesParsed),
+		static_cast<unsigned long long>(receiveWindow.parseIncompleteCallbacks),
+		static_cast<unsigned long long>(receiveWindow.postRecvBacklogCallbacks),
+		static_cast<unsigned long long>(g_flightLoopDiagnostics.slowFramesWithReceiveBacklog),
+		static_cast<unsigned long long>(g_flightLoopDiagnostics.slowFramesWithReceiveIncomplete),
+		static_cast<unsigned long long>(g_flightLoopDiagnostics.slowFramesWithReceiveFullBuffer));
+	XPLMDebugString(buf);
 
 	// Per-slow-frame concurrent render frame_rate_period distribution. High
 	// mean/max here while section costs stay low implies render-bound slow
@@ -769,6 +802,7 @@ float MyFlightLoopCallback(float inElapsedSinceLastCall, float inElapsedTimeSinc
 	}
 	const uint64_t callbackStartUsec = steadyNowUsec();
 	std::array<uint64_t, kDiagSectionCount> sectionElapsed{};
+	ConnectionManager::ReceiveDataCallbackDiagnostics receiveDiagnostics;
 	bool emitDiagFlightLoop = false;
 
 	auto recordSection = [&](FlightLoopDiagSection section, uint64_t startUsec) {
@@ -792,6 +826,18 @@ float MyFlightLoopCallback(float inElapsedSinceLastCall, float inElapsedTimeSinc
 					? static_cast<uint64_t>(g_flightLoopDiagnostics.lastFrameRatePeriod * 1000000.0f)
 					: 0;
 				g_flightLoopDiagnostics.slowFrameRatePeriodUsec.add(concurrentRatePeriodUsec);
+				// Receive-backlog correlation for THIS slow frame. Note: postRecvBacklog
+				// means data was readable immediately after recv (newly arrived data is
+				// possible) - it is NOT proof of an undrained backlog or parser corruption.
+				if (receiveDiagnostics.postRecvBacklog) {
+					g_flightLoopDiagnostics.slowFramesWithReceiveBacklog++;
+				}
+				if (receiveDiagnostics.parseIncomplete) {
+					g_flightLoopDiagnostics.slowFramesWithReceiveIncomplete++;
+				}
+				if (receiveDiagnostics.bytesReceived >= kReceiveFullBufferBytes) {
+					g_flightLoopDiagnostics.slowFramesWithReceiveFullBuffer++;
+				}
 			}
 		}
 		return -1.0f;
@@ -989,6 +1035,7 @@ float MyFlightLoopCallback(float inElapsedSinceLastCall, float inElapsedTimeSinc
 	// Continuously receive and process actuator data
 	sectionStartUsec = steadyNowUsec();
 	ConnectionManager::receiveData();
+	receiveDiagnostics = ConnectionManager::getLastReceiveDataDiagnostics();
 	recordSection(FlightLoopDiagSection::Receive, sectionStartUsec);
 
 	// Actuator overrides
