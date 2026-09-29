@@ -1,0 +1,25 @@
+version: '3'
+
+tasks:
+  check:fast:
+    desc: Configure the plugin build on this supported host
+    cmds:
+      - cmake -S . -B .pipeline-state/build/px4xplane-ci -DCMAKE_BUILD_TYPE=Release
+      - cmake -DPIPELINE_BUILD_DIR=.pipeline-state/build/px4xplane-ci -DPIPELINE_MODE=check-fast -DPIPELINE_PROFILE=px4xplane-macos-arm64-native-v1 -P pipeline/qualify.cmake
+      - node pipeline/runtime.mjs report check:fast
+
+  check:
+    desc: Build and verify the same release plugin output as the former Actions job
+    cmds:
+      - cmake -S . -B .pipeline-state/build/px4xplane-ci -DCMAKE_BUILD_TYPE=Release
+      - cmake --build .pipeline-state/build/px4xplane-ci --config Release --parallel 4
+      - cmake -DPIPELINE_BUILD_DIR=.pipeline-state/build/px4xplane-ci -DPIPELINE_MODE=check -DPIPELINE_PROFILE=px4xplane-macos-arm64-native-v1 -P pipeline/qualify.cmake
+      - node pipeline/runtime.mjs report check
+
+  package:
+    desc: Build, verify, and retain the plugin directory as a local Pipeline artifact
+    cmds:
+      - cmake -S . -B .pipeline-state/build/px4xplane-ci -DCMAKE_BUILD_TYPE=Release
+      - cmake --build .pipeline-state/build/px4xplane-ci --config Release --parallel 4
+      - cmake -DPIPELINE_BUILD_DIR=.pipeline-state/build/px4xplane-ci -DPIPELINE_MODE=package -DPIPELINE_PROFILE=px4xplane-macos-arm64-native-v1 -P pipeline/qualify.cmake
+      - node pipeline/runtime.mjs report package
