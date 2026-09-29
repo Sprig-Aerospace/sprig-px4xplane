@@ -13,7 +13,7 @@ get_filename_component(build_root "${PIPELINE_BUILD_DIR}" ABSOLUTE BASE_DIR "${s
 set(report_root "${source_root}/.pipeline-state/reports")
 if(PIPELINE_MODE STREQUAL "check-fast")
   file(MAKE_DIRECTORY "${report_root}/check-fast")
-  file(WRITE "${report_root}/check-fast/configure.json" "{\"outcome\":\"passed\",\"assertions\":1,\"configured\":true}\n")
+  file(WRITE "${report_root}/check-fast/configure.json" "{\"outcome\":\"passed\",\"assertions\":1,\"configured\":true,\"profile\":\"${PIPELINE_PROFILE}\"}\n")
   return()
 endif()
 

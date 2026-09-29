@@ -1,0 +1,19 @@
+version: '3'
+tasks:
+  check:fast:
+    cmds:
+      - cmake -S "$PIPELINE_SOURCE_DIR" -B "$PIPELINE_SOURCE_DIR/.pipeline-state/build/px4xplane-ci" -DCMAKE_BUILD_TYPE=Release
+      - cmake -DPIPELINE_BUILD_DIR="$PIPELINE_SOURCE_DIR/.pipeline-state/build/px4xplane-ci" -DPIPELINE_MODE=check-fast -DPIPELINE_PROFILE=macos-26-arm64-native-v1 -P "$PIPELINE_SOURCE_DIR/pipeline/qualify.cmake"
+      - cd "$PIPELINE_SOURCE_DIR" && node pipeline/runtime.mjs report check:fast
+  check:
+    cmds:
+      - cmake -S "$PIPELINE_SOURCE_DIR" -B "$PIPELINE_SOURCE_DIR/.pipeline-state/build/px4xplane-ci" -DCMAKE_BUILD_TYPE=Release
+      - cmake --build "$PIPELINE_SOURCE_DIR/.pipeline-state/build/px4xplane-ci" --config Release --parallel 4
+      - cmake -DPIPELINE_BUILD_DIR="$PIPELINE_SOURCE_DIR/.pipeline-state/build/px4xplane-ci" -DPIPELINE_MODE=check -DPIPELINE_PROFILE=macos-26-arm64-native-v1 -P "$PIPELINE_SOURCE_DIR/pipeline/qualify.cmake"
+      - cd "$PIPELINE_SOURCE_DIR" && node pipeline/runtime.mjs report check
+  package:
+    cmds:
+      - cmake -S "$PIPELINE_SOURCE_DIR" -B "$PIPELINE_SOURCE_DIR/.pipeline-state/build/px4xplane-ci" -DCMAKE_BUILD_TYPE=Release
+      - cmake --build "$PIPELINE_SOURCE_DIR/.pipeline-state/build/px4xplane-ci" --config Release --parallel 4
+      - cmake -DPIPELINE_BUILD_DIR="$PIPELINE_SOURCE_DIR/.pipeline-state/build/px4xplane-ci" -DPIPELINE_MODE=package -DPIPELINE_PROFILE=macos-26-arm64-native-v1 -P "$PIPELINE_SOURCE_DIR/pipeline/qualify.cmake"
+      - cd "$PIPELINE_SOURCE_DIR" && node pipeline/runtime.mjs report package

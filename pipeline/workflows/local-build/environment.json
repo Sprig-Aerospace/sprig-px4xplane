@@ -1,7 +1,15 @@
 {
   "schemaVersion": 2,
   "contractVersion": "pipeline.local-workflow/v2",
-  "planRevision": 1,
+  "pipelineCompatibility": {
+    "environmentContract": 2,
+    "runnerProtocol": 1,
+    "requiredFeatures": [
+      "bounded-package-artifacts",
+      "committed-package-snapshots",
+      "git-submodule-snapshots"
+    ]
+  },
   "profile": {
     "id": "macos-26-arm64-native-v1",
     "executionMode": "native",
@@ -23,42 +31,9 @@
     ],
     "additionalProfilesStatus": "unverified; add through PIPE-107"
   },
-  "pipelineCompatibility": {
-    "environmentContract": 2,
-    "runnerProtocol": 1,
-    "requiredFeatures": [
-      "project-templates",
-      "immutable-project-dependencies",
-      "bounded-package-artifacts",
-      "git-submodule-snapshots"
-    ]
-  },
   "tools": {
     "task": {
-      "version": "3.53.1",
-      "versionRequirement": "=3.53.1",
-      "sourceRepository": "https://github.com/go-task/task",
-      "sourceTag": "v3.53.1",
-      "sourceTagObject": "a10322cd63f94d8bc8b48bb5c0e80eec10eda1e7",
-      "sourceCommit": "ff3372fc50a47348610d722616f1a073aace0513",
-      "license": "MIT",
-      "licenseFile": "pipeline/LICENSE.task",
-      "artifacts": {
-        "darwin-arm64": {
-          "url": "https://github.com/go-task/task/releases/download/v3.53.1/task_darwin_arm64.tar.gz",
-          "sizeBytes": 15609872,
-          "sha256": "85d2d96c2380b33d7855b07b3f7a20dc7ca0eda999a26efa0fb5f6f32b366cd7",
-          "checksumManifestUrl": "https://github.com/go-task/task/releases/download/v3.53.1/task_checksums.txt",
-          "checksumManifestSizeBytes": 2663,
-          "checksumManifestSha256": "acd6542d33465e22216e47e10997d1c5a68f54a2af0c900083eeaaad5ce85337"
-        }
-      }
-    },
-    "appleClang": {
-      "version": "21.0.0",
-      "build": "clang-2100.0.123.102",
-      "target": "arm64-apple-darwin25.4.0",
-      "distribution": "Xcode 26.4.1 toolchain"
+      "version": "3.53.1"
     },
     "cmake": {
       "version": "4.3.3",
@@ -71,59 +46,14 @@
     "ninja": {
       "version": "1.13.2"
     },
+    "appleClang": {
+      "version": "21.0.0",
+      "build": "clang-2100.0.123.102",
+      "target": "arm64-apple-darwin25.4.0",
+      "distribution": "Xcode 26.4.1 toolchain"
+    },
     "node": {
-      "version": "24.14.1",
-      "packageManager": {
-        "name": "npm",
-        "version": "11.15.0",
-        "lockfileVersion": 3,
-        "installCommand": "npm ci"
-      }
-    }
-  },
-  "environmentInputs": {
-    "required": [
-      "PATH"
-    ],
-    "optional": [
-      "TMPDIR"
-    ],
-    "controlledByWorkflow": [],
-    "credentialsRequiredForOrdinaryChecks": false,
-    "inheritanceRule": "The local build/check tasks use only the selected source tree and declared tool paths; no release credentials or network inputs are required."
-  },
-  "entryPoints": {
-    "check:fast": {
-      "timeoutSeconds": 600,
-      "requiredSuites": [
-        {
-          "id": "configure",
-          "minimumAssertions": 1,
-          "report": ".pipeline-state/reports/check-fast/configure.json"
-        }
-      ]
-    },
-    "check": {
-      "timeoutSeconds": 3600,
-      "requiredSuites": [
-        {
-          "id": "plugin-build",
-          "minimumAssertions": 5,
-          "report": ".pipeline-state/reports/check/plugin-build.json"
-        }
-      ]
-    },
-    "package": {
-      "timeoutSeconds": 3600,
-      "requiredSuites": [
-        {
-          "id": "plugin-build",
-          "minimumAssertions": 5,
-          "report": ".pipeline-state/reports/package/plugin-build.json"
-        }
-      ],
-      "artifact": ".pipeline-state/packages/px4xplane-ci-mac.tar.gz",
-      "maximumArtifactMiB": 128
+      "version": "24.14.1"
     }
   },
   "paths": {
@@ -2302,38 +2232,53 @@
       "lib/simpleini/vcproj/SimpleIni.vcxproj",
       "lib/simpleini/vcproj/SimpleIni.vcxproj.filters"
     ],
-    "trustInputs": [
-      "pipeline/**"
-    ],
-    "ignoredOutputs": [
-      ".pipeline-state/**",
-      ".task/**",
-      "build/**"
-    ],
-    "stateRoot": ".pipeline-state",
-    "sourceFileLimit": 4096,
     "submodules": [
       "lib/XYZgeomag",
       "lib/mavlink/c_library_v2",
       "lib/simpleini",
       "lib/Eigen"
-    ]
+    ],
+    "stateRoot": ".pipeline-state"
   },
   "resourceBudget": {
     "hostConcurrentRuns": 1,
-    "activeRunsPerWorktree": 1,
-    "buildParallelJobsPerRun": 4,
-    "checkFastWarmWallSeconds": 600,
-    "checkColdWallSeconds": 3600,
-    "checkWarmWallSeconds": 3600,
-    "terminationGraceSeconds": 2,
-    "terminationForceDeadlineSeconds": 5,
+    "logMiBPerRun": 10,
     "stateStorageMiBPerWorktree": 2048,
-    "logMiBPerRun": 10
+    "bootstrapCacheMiBPerRun": 256
   },
-  "taskfile": "pipeline/Taskfile.yml",
-  "projectAdapter": "pipeline/runtime.mjs",
-  "projectTemplateVersion": 2,
-  "projectAdapterSha256": "da4d13609dabbfd5c409a243f2209a731760c48e9f835f80ff635ef9425a9cbd",
-  "projectPackages": []
+  "entryPoints": {
+    "check:fast": {
+      "timeoutSeconds": 600,
+      "requiredSuites": [
+        {
+          "id": "plugin-build",
+          "minimumAssertions": 5,
+          "report": ".pipeline-state/reports/check-fast/configure.json"
+        }
+      ]
+    },
+    "check": {
+      "timeoutSeconds": 1800,
+      "requiredSuites": [
+        {
+          "id": "plugin-build",
+          "minimumAssertions": 5,
+          "report": ".pipeline-state/reports/check/plugin-build.json"
+        }
+      ]
+    },
+    "package": {
+      "timeoutSeconds": 600,
+      "requiredSuites": [
+        {
+          "id": "plugin-build",
+          "minimumAssertions": 5,
+          "report": ".pipeline-state/reports/package/plugin-build.json"
+        }
+      ],
+      "sourceMode": "complete-commit",
+      "maximumArtifactMiB": 1024,
+      "artifact": ".pipeline-state/packages/px4xplane-ci-mac.tar.gz"
+    }
+  }
 }
