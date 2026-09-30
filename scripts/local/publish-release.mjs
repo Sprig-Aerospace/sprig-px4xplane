@@ -55,7 +55,7 @@ function notes(root, plan) {
     if (git(root, 'tag', '--list', 'v*').split('\n').filter(Boolean).some(item => item !== tag)) {
       fail('Cannot identify the previous release tag; the selected source needs complete release history.');
     }
-    return `# px4xplane ${tag}\n\nInitial release.\n\n- Source commit: ${sourceCommit}\n- Package SHA-256: ${asset.sha256}\n`;
+    return `# px4xplane ${tag}\n\nInitial release.\n\n- Source commit: ${sourceCommit}\n- Qualified output: macOS arm64\n- Package SHA-256: ${asset.sha256}\n\n<!-- sprig-package source=${sourceCommit} sha256=${asset.sha256} -->\n`;
   }
   const changes = git(root, 'log', '--pretty=format:- %s', `${previous}..${tag}`);
   return `# px4xplane ${tag}\n\n## Changes\n\n${changes || '- No commits since the previous tag.'}\n\n## Build\n\n- Source commit: ${sourceCommit}\n- Qualified output: macOS arm64\n- Package SHA-256: ${asset.sha256}\n\n<!-- sprig-package source=${sourceCommit} sha256=${asset.sha256} -->\n`;
@@ -63,8 +63,11 @@ function notes(root, plan) {
 
 export function prepare(root, tag) {
   const plan = candidate(root, tag);
+  const releaseNotes = notes(root, plan);
+  plan.notesSha256 = hash(Buffer.from(releaseNotes));
   const planPath = path.join(root, planRelative);
   fs.mkdirSync(path.dirname(planPath), {recursive: true});
+  fs.writeFileSync(path.join(path.dirname(planPath), 'release-notes.md'), releaseNotes, {mode: 0o600});
   fs.writeFileSync(planPath, `${JSON.stringify(plan, null, 2)}\n`, {mode: 0o600});
   return plan;
 }
@@ -72,12 +75,16 @@ export function prepare(root, tag) {
 export function stageDraft(root, tag, confirmation) {
   if (confirmation !== tag) fail(`Draft creation requires --confirm ${tag}.`);
   const plan = candidate(root, tag);
+  const releaseNotes = notes(root, plan);
+  plan.notesSha256 = hash(Buffer.from(releaseNotes));
   const planPath = path.join(root, planRelative);
   if (fs.readFileSync(planPath, 'utf8') !== `${JSON.stringify(plan, null, 2)}\n`) fail('Release plan is missing or stale; rerun release:prepare.');
   const notesPath = path.join(root, '.pipeline-state/reports/release/release-notes.md');
-  fs.writeFileSync(notesPath, notes(root, plan), {mode: 0o600});
-  const url = gh(['release', 'create', tag, plan.asset.path, '--repo', repo, '--title', `px4xplane ${tag}`,
-    '--notes-file', notesPath, '--draft', '--verify-tag'], root);
+  fs.writeFileSync(notesPath, releaseNotes, {mode: 0o600});
+  const args = ['release', 'create', tag, plan.asset.path, '--repo', repo, '--title', `px4xplane ${tag}`,
+    '--notes-file', notesPath, '--draft', '--verify-tag'];
+  if (/alpha|beta|rc/.test(tag)) args.push('--prerelease');
+  const url = gh(args, root);
   const readback = gh(['api', `repos/${repo}/releases/tags/${tag}`], root);
   const release = JSON.parse(readback);
   if (release.tag_name !== tag || release.draft !== true || !release.html_url) fail('GitHub draft release readback did not match the selected tag.');
