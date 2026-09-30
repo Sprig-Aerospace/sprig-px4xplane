@@ -62,3 +62,60 @@ Install CMake, the X-Plane SDK inputs already tracked by this repository, the
 pinned Task tool and platform compiler/linker dependencies before setup. The
 workflow does not run privileged system package managers. Windows/Linux require
 their own supported local profiles and qualification before being claimed.
+
+## Explicit local release workflow
+
+The separate `release.yml` replacement uses a finite, generated Pipeline
+workflow for one selected tag, package receipt and remote operation. First run
+the normal reviewed `package` entry and retain its passing run directory. Use a
+pushed version tag at that exact clean source commit. A reviewed manual
+`dev-YYYYMMDD-HHMMSS` tag remains a prerelease. The generator checks the tag,
+source, package report, retained artifact and SHA-256, then writes a new
+workflow directory outside the repository. It contains no credential bytes.
+Select the qualified Task binary and, for authenticated operations, the existing
+GitHub CLI Keychain home/config directories by path:
+
+```sh
+node scripts/local/managed-release-workflow.mjs generate \
+  "$SOURCE" "$PASSING_PACKAGE_RUN" "$TAG" "$NEW_STAGE_WORKFLOW" stage "$TASK_BINARY" \
+  --auth-home "$GH_HOME" --gh-config-dir "$GH_CONFIG_DIR"
+pipeline run "$SOURCE" check:fast --workflow "$NEW_STAGE_WORKFLOW"
+pipeline --workflow "$NEW_STAGE_WORKFLOW" onboarding inspect "$SOURCE"
+# A human reviews the exact workflow and approves its displayed REVIEW_ID:
+pipeline --workflow "$NEW_STAGE_WORKFLOW" onboarding approve "$SOURCE" "$REVIEW_ID" --consent
+pipeline package-preview "$SOURCE" --workflow "$NEW_STAGE_WORKFLOW"
+pipeline run "$SOURCE" package --workflow "$NEW_STAGE_WORKFLOW"
+pipeline run "$SOURCE" check --workflow "$NEW_STAGE_WORKFLOW"
+```
+
+`check:fast` is a no-network local plan; `package` is the reviewed, explicit
+remote mutation; `check` reads the remote release and tag back. The stage
+operation creates a draft with only the qualified macOS arm64 archive. For
+publication, generate a **new** workflow using `publish` and the same tag and
+passing package run, review that request, then repeat the `check:fast`, trust
+review, `package-preview`, `package` and `check` sequence with that new workflow.
+
+```sh
+node scripts/local/managed-release-workflow.mjs generate \
+  "$SOURCE" "$PASSING_PACKAGE_RUN" "$TAG" "$NEW_PUBLISH_WORKFLOW" publish "$TASK_BINARY" \
+  --auth-home "$GH_HOME" --gh-config-dir "$GH_CONFIG_DIR"
+```
+
+The publish `package` action verifies the staged draft's source and asset digest
+before making it public. Pipeline retains a receipt archive for
+each mutation. View results through Pipeline's Runs view or local `status`, `log`
+and `inspect` commands. A failed run after a remote write requires readback and
+reconciliation before retrying; never overwrite an asset to force a pass.
+
+The selected credential directories are passed only to the GitHub CLI child.
+Ambient token variables are removed. No token is placed in the workflow,
+Task environment, logs or source. The ordinary build/check/package workflow
+has no remote publication step. Pipeline's local workflow trust review is
+required before either remote `package` action. Authentication in Pipeline's
+isolated process and release-write scope remain to be qualified; host CLI read
+access does not establish them.
+
+No release was staged or published by this candidate. Keep
+`.github/workflows/release.yml` enabled until required review, managed
+execution, authorized draft/publication and readback pass. Windows/Linux and
+universal release assets remain deferred by the owner decision recorded for #28.
