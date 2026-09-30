@@ -17,15 +17,23 @@ retire the Actions workflow.
 
 ## Remaining #29 acceptance
 
-- Add a Git-shared explicit local release/publish operation that consumes an
-  inspected, source-bound package, refuses an unselected or mismatched version
-  and commit, and performs no upload until the operator explicitly starts it.
-- Define and verify the local credential lookup without exposing credentials to
-  Task child processes, logs, or artifacts. Ordinary check/package runs remain
-  credential-free.
-- Qualify the release candidate and the publication preflight/readback behavior
-  with applicable success/failure evidence. Do not create a production release
-  merely to exercise an unapproved target.
+- Implemented locally: Git-shared explicit `release:prepare`, `release:stage-draft`
+  and `release:publish` tasks. They require a selected version tag at the exact
+  clean source commit, a passing macOS package report, and matching package
+  bytes. Draft creation and public publication each require the exact tag as
+  operator confirmation. Draft readback is checked before publication.
+- Focused fixture qualification: `node --test tests/local-release.test.mjs` —
+  5 passed, 0 failed. It covers source/tag identity, unchanged package bytes,
+  dirty-source rejection and exact-tag confirmation. This is fixture evidence,
+  not GitHub authentication, upload or release-readback qualification.
+- Owner input still required: confirm an authorized GitHub credential route
+  for this repository's `contents:write` release operation. The helper clears
+  token environment variables before invoking GitHub CLI; the CLI uses its
+  configured local credential store. No token is printed or placed in plan or
+  report files. The host's previously checked GitHub CLI credential was
+  rejected, so no live attempt is claimed.
+- No production release has been staged or published. Do not invoke either
+  network task until the credential route and a release target are approved.
 - Keep `.github/workflows/release.yml` enabled until the local operation,
   explicit publication/readback contract, trigger/status disposition, and
   required review are accepted. Preserve the separate product release policy.
