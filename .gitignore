@@ -595,3 +595,6 @@ appsettings.Production.json
 *.sqlite
 *.sqlite3
 /NUL
+
+# Keep the owner-local Claude settings out of source snapshots.
+.claude/settings.local.json

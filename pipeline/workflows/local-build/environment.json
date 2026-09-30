@@ -7,7 +7,8 @@
     "requiredFeatures": [
       "bounded-package-artifacts",
       "committed-package-snapshots",
-      "git-submodule-snapshots"
+      "git-submodule-snapshots",
+      "source-symlink-snapshots"
     ]
   },
   "profile": {
@@ -69,7 +70,6 @@
       "src/**",
       "include/**",
       "config/**",
-      "lib/SDK/CHeaders/**",
       "scripts/**",
       "tests/**",
       "tools/**",
@@ -2230,7 +2230,23 @@
       "lib/simpleini/tests/ts-wchar.cpp",
       "lib/simpleini/vcproj/SimpleIni.sln",
       "lib/simpleini/vcproj/SimpleIni.vcxproj",
-      "lib/simpleini/vcproj/SimpleIni.vcxproj.filters"
+      "lib/simpleini/vcproj/SimpleIni.vcxproj.filters",
+      ".github/workflows/**",
+      "CHANGELOG.md",
+      "CUsersp30plsourcerepospx4xplanetemp_log_analysis.txt",
+      "Makefile.linux",
+      "Makefile.macos",
+      "docs/**",
+      "lib/SDK/**",
+      "lib/Eigen/**",
+      "lib/XYZgeomag/**",
+      "lib/mavlink/c_library_v2/**",
+      "lib/simpleini/**",
+      "px4-xplane.filters",
+      "px4-xplane.sln",
+      "px4-xplane.vcxproj",
+      "resource.h",
+      "setup/setup_px4_sitl.sh"
     ],
     "submodules": [
       "lib/XYZgeomag",
