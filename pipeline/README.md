@@ -38,9 +38,9 @@ the plugin. Installed-app release and update policy is separate.
 
 The original job names are `Build ${{ matrix.platform }} (${{ matrix.os }})`
 and `Build Summary`. They are GitHub statuses, not the names of local Pipeline
-tasks. Do not claim those statuses are retired while `build.yml` remains enabled.
-Only `.github/workflows/build.yml` is in this issue; retain `release.yml` and
-other product workflows until their own owner disposition is established.
+tasks. The old `Build …` statuses end when `build.yml` is removed. This issue owns only
+`.github/workflows/build.yml`; `release.yml` and other product workflows remain
+under their own dispositions.
 
 Before invocation, check `pipeline capabilities` and confirm the selected
 Pipeline CLI advertises `bounded-package-artifacts`,
@@ -49,15 +49,14 @@ source does not upgrade an installed Pipeline.app or an already-running service.
 Use a qualified CLI/runtime with those features; inspect its binary and service
 identity if choosing another installation.
 
-The committed profile currently qualifies macOS 26.4.1 arm64 only. The former
-Actions workflow also built Windows and Linux, cancelled superseded PR/manual
-runs and retained platform artifacts for 90 days. Those platform outputs and
-retention are not qualified by the macOS result. Keep `.github/workflows/build.yml`
-enabled until each applicable local replacement has positive and deliberate
-failure evidence or its behavior has an explicit owner disposition. At cutover,
-record that automatic pull-request/manual triggers and GitHub check enforcement
-are retired; local runs are explicit and do not create forge statuses. Do not
-describe the former macOS binary as universal.
+The committed profile qualifies macOS 26.4.1 arm64 only. Windows/Linux outputs,
+universal packaging, superseded-run cancellation and 90-day remote artifact
+retention remain deferred and unqualified; this cutover does not remove product
+source or support code for those platforms. After the macOS local replacement
+passed positive package and deliberate-failure checks, `.github/workflows/build.yml`
+was retired. Its automatic pull-request/manual triggers and `Build …` GitHub
+statuses are retired with it. Pipeline runs remain explicit and create no forge
+statuses. Do not describe the former macOS binary as universal.
 
 Install CMake, the X-Plane SDK inputs already tracked by this repository, the
 pinned Task tool and platform compiler/linker dependencies before setup. The
