@@ -9,6 +9,7 @@ const reportRelative = '.pipeline-state/reports/package/plugin-build.json';
 const planRelative = '.pipeline-state/reports/release/release-plan.json';
 const hash = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const fail = message => { throw new Error(message); };
+const validTag = tag => /^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(tag) || /^dev-\d{8}-\d{6}$/.test(tag);
 
 function git(root, ...args) {
   const result = spawnSync('git', ['-C', root, ...args], {encoding: 'utf8'});
@@ -17,7 +18,7 @@ function git(root, ...args) {
 }
 
 function candidate(root, tag) {
-  if (!/^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(tag)) fail('Release tag must match vMAJOR.MINOR.PATCH[-prerelease].');
+  if (!validTag(tag)) fail('Release tag must be vMAJOR.MINOR.PATCH[-prerelease] or dev-YYYYMMDD-HHMMSS.');
   const status = git(root, 'status', '--porcelain', '--untracked-files=normal');
   if (status) fail('Refusing release from a dirty source checkout.');
   const commit = git(root, 'rev-parse', 'HEAD');
@@ -52,10 +53,12 @@ function notes(root, plan) {
   let previous;
   try { previous = git(root, 'describe', '--tags', '--abbrev=0', `${tag}^`); }
   catch {
-    if (git(root, 'tag', '--list', 'v*').split('\n').filter(Boolean).some(item => item !== tag)) {
+    const tags = git(root, 'tag', '--list', 'v*').split('\n').filter(Boolean).filter(item => item !== tag);
+    previous = tags.find(item => git(root, 'rev-parse', `${item}^{commit}`) === sourceCommit);
+    if (!previous && tags.length) {
       fail('Cannot identify the previous release tag; the selected source needs complete release history.');
     }
-    return `# px4xplane ${tag}\n\nInitial release.\n\n- Source commit: ${sourceCommit}\n- Qualified output: macOS arm64\n- Package SHA-256: ${asset.sha256}\n\n<!-- sprig-package source=${sourceCommit} sha256=${asset.sha256} -->\n`;
+    if (!previous) return `# px4xplane ${tag}\n\nInitial release.\n\n- Source commit: ${sourceCommit}\n- Qualified output: macOS arm64\n- Package SHA-256: ${asset.sha256}\n\n<!-- sprig-package source=${sourceCommit} sha256=${asset.sha256} -->\n`;
   }
   const changes = git(root, 'log', '--pretty=format:- %s', `${previous}..${tag}`);
   return `# px4xplane ${tag}\n\n## Changes\n\n${changes || '- No commits since the previous tag.'}\n\n## Build\n\n- Source commit: ${sourceCommit}\n- Qualified output: macOS arm64\n- Package SHA-256: ${asset.sha256}\n\n<!-- sprig-package source=${sourceCommit} sha256=${asset.sha256} -->\n`;
@@ -83,7 +86,7 @@ export function stageDraft(root, tag, confirmation) {
   fs.writeFileSync(notesPath, releaseNotes, {mode: 0o600});
   const args = ['release', 'create', tag, plan.asset.path, '--repo', repo, '--title', `px4xplane ${tag}`,
     '--notes-file', notesPath, '--draft', '--verify-tag'];
-  if (/alpha|beta|rc/.test(tag)) args.push('--prerelease');
+  if (tag.startsWith('dev-') || /alpha|beta|rc/.test(tag)) args.push('--prerelease');
   const url = gh(args, root);
   const readback = gh(['api', `repos/${repo}/releases/tags/${tag}`], root);
   const release = JSON.parse(readback);
@@ -95,7 +98,7 @@ export function stageDraft(root, tag, confirmation) {
 
 export function publishDraft(root, tag, confirmation) {
   if (confirmation !== tag) fail(`Publishing requires --confirm ${tag}.`);
-  if (!/^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(tag)) fail('Release tag must match vMAJOR.MINOR.PATCH[-prerelease].');
+  if (!validTag(tag)) fail('Release tag must be vMAJOR.MINOR.PATCH[-prerelease] or dev-YYYYMMDD-HHMMSS.');
   const before = JSON.parse(gh(['api', `repos/${repo}/releases/tags/${tag}`], root));
   if (before.tag_name !== tag || before.draft !== true) fail('Only the matching verified draft release can be published.');
   const asset = (before.assets ?? []).find(item => item.name === path.basename(artifactRelative));
