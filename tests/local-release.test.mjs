@@ -17,7 +17,8 @@ function repo(t) {
   };
   git('init', '-q'); git('config', 'user.name', 'Release Fixture'); git('config', 'user.email', 'release@example.invalid');
   fs.writeFileSync(path.join(root, '.gitignore'), '.pipeline-state/\n');
-  fs.writeFileSync(path.join(root, 'source.txt'), 'release fixture\n'); git('add', '.'); git('commit', '-qm', 'fixture source'); git('tag', 'v1.2.3');
+  fs.writeFileSync(path.join(root, 'source.txt'), 'release fixture\n'); git('add', '.'); git('commit', '-qm', 'fixture source');
+  for (const tag of ['v1.2.3', 'dev-20260930-123456']) git('tag', tag);
   const artifactPath = path.join(root, '.pipeline-state/packages/px4xplane-ci-mac.tar.gz');
   fs.mkdirSync(path.dirname(artifactPath), {recursive: true}); fs.writeFileSync(artifactPath, 'qualified fixture package');
   const bytes = fs.readFileSync(artifactPath);
@@ -41,7 +42,7 @@ if (process.env.GH_TOKEN || process.env.GITHUB_TOKEN || process.env.GH_ENTERPRIS
 if (args[0] === 'release' && args[1] === 'create') {
   const tag = args[2], assetPath = args[3], notesPath = args[args.indexOf('--notes-file') + 1];
   const bytes = fs.readFileSync(assetPath), body = fs.readFileSync(notesPath, 'utf8');
-  const state = {tag_name: tag, draft: true, html_url: 'https://github.com/Sprig-Aerospace/sprig-px4xplane/releases/tag/' + tag, body,
+  const state = {tag_name: tag, draft: true, prerelease: args.includes('--prerelease'), html_url: 'https://github.com/Sprig-Aerospace/sprig-px4xplane/releases/tag/' + tag, body,
     assets: [{name: path.basename(assetPath), size: bytes.length, digest: 'sha256:' + hash(bytes)}]};
   fs.writeFileSync(statePath, JSON.stringify(state)); process.stdout.write(state.html_url); process.exit(0);
 }
@@ -122,6 +123,27 @@ test('publication rejects a draft with a mismatched remote asset digest', t => {
     fs.writeFileSync(fake.statePath, JSON.stringify(state));
     assert.throws(() => publishDraft(f.root, 'v1.2.3', 'v1.2.3'), /Draft metadata and asset digest/);
     assert.equal(JSON.parse(fs.readFileSync(fake.statePath, 'utf8')).draft, true);
+  } finally {
+    process.env.PATH = oldPath ?? '';
+    delete process.env.FAKE_GH_STATE_FILE;
+    delete process.env.FAKE_GH_SOURCE_COMMIT;
+  }
+});
+
+test('manual dispatch tag form remains an explicitly selected prerelease', t => {
+  const f = repo(t), tag = 'dev-20260930-123456';
+  const sourceCommit = spawnSync('git', ['-C', f.root, 'rev-parse', 'HEAD'], {encoding: 'utf8'}).stdout.trim();
+  const fake = fakeGh(f, sourceCommit), oldPath = process.env.PATH;
+  process.env.PATH = `${fake.bin}:${oldPath ?? ''}`;
+  process.env.FAKE_GH_STATE_FILE = fake.statePath;
+  process.env.FAKE_GH_SOURCE_COMMIT = sourceCommit;
+  try {
+    prepare(f.root, tag);
+    stageDraft(f.root, tag, tag);
+    const state = JSON.parse(fs.readFileSync(fake.statePath, 'utf8'));
+    assert.equal(state.tag_name, tag);
+    assert.equal(state.prerelease, true);
+    assert.equal(state.draft, true);
   } finally {
     process.env.PATH = oldPath ?? '';
     delete process.env.FAKE_GH_STATE_FILE;
