@@ -38,7 +38,9 @@ the plugin. Installed-app release and update policy is separate.
 
 The original job names are `Build ${{ matrix.platform }} (${{ matrix.os }})`
 and `Build Summary`. They are GitHub statuses, not the names of local Pipeline
-tasks. The old `Build …` statuses end when `build.yml` is removed. This issue owns only
+tasks. `build.yml` remains enabled for automatic PR builds, superseded-run
+cancellation and 90-day hosted artifacts. Local Pipeline runs are available
+in parallel and do not create forge statuses. This issue owns only
 `.github/workflows/build.yml`; `release.yml` and other product workflows remain
 under their own dispositions.
 
@@ -49,14 +51,13 @@ source does not upgrade an installed Pipeline.app or an already-running service.
 Use a qualified CLI/runtime with those features; inspect its binary and service
 identity if choosing another installation.
 
-The committed profile qualifies macOS 26.4.1 arm64 only. Windows/Linux outputs,
-universal packaging, superseded-run cancellation and 90-day remote artifact
-retention remain deferred and unqualified; this cutover does not remove product
-source or support code for those platforms. After the macOS local replacement
-passed positive package and deliberate-failure checks, `.github/workflows/build.yml`
-was retired. Its automatic pull-request/manual triggers and `Build …` GitHub
-statuses are retired with it. Pipeline runs remain explicit and create no forge
-statuses. Do not describe the former macOS binary as universal.
+The committed local profile qualifies macOS 26.4.1 arm64 only. Windows/Linux
+and universal outputs remain unqualified locally; their existing Actions
+matrix is retained. The local Pipeline workflow passed positive package and
+deliberate-failure checks, but it does not replace automatic PR execution,
+superseded-run cancellation or 90-day hosted artifacts. Keep `build.yml`
+until the owner accepts a specific disposition or a replacement is qualified.
+Do not describe the local macOS binary as universal.
 
 Install CMake, the X-Plane SDK inputs already tracked by this repository, the
 pinned Task tool and platform compiler/linker dependencies before setup. The
