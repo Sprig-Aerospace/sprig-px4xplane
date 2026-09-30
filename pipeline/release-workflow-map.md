@@ -21,11 +21,14 @@ retire the Actions workflow.
   and `release:publish` tasks. They require a selected version tag at the exact
   clean source commit, a passing macOS package report, and matching package
   bytes. Draft creation and public publication each require the exact tag as
-  operator confirmation. Draft readback is checked before publication.
+  operator confirmation. Draft readback is checked before publication. The
+  former manual-dispatch `dev-YYYYMMDD-HHMMSS` tag is supported as an explicit
+  operator-selected prerelease tag.
 - Focused fixture qualification: `node --test tests/local-release.test.mjs` —
-  5 passed, 0 failed. It covers source/tag identity, unchanged package bytes,
-  dirty-source rejection and exact-tag confirmation. This is fixture evidence,
-  not GitHub authentication, upload or release-readback qualification.
+  8 passed, 0 failed. It covers source/tag identity, unchanged package bytes,
+  dirty-source rejection, exact-tag confirmation, simulated draft/publish
+  readback, asset digest rejection and manual-dispatch prerelease tagging. This
+  is fixture evidence, not live GitHub authentication or publication.
 - Owner input still required: confirm an authorized GitHub credential route
   for this repository's `contents:write` release operation. The helper clears
   token environment variables before invoking GitHub CLI; the CLI uses its
