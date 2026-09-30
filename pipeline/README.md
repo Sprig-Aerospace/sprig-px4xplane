@@ -70,7 +70,9 @@ The separate `release.yml` replacement runs only after the operator selects a
 version tag on the exact clean source commit. It builds and verifies the macOS
 arm64 package, checks that the package bytes match Pipeline's passing package
 report, and writes a local release plan. Use a pushed version tag whose commit
-is the current checkout:
+is the current checkout. To replace the former manual dispatch prerelease,
+select a pushed `dev-YYYYMMDD-HHMMSS` tag; the publisher preserves its
+prerelease status:
 
 ```sh
 task -t pipeline/workflows/local-build/Taskfile.yml release:prepare VERSION=v1.2.3
