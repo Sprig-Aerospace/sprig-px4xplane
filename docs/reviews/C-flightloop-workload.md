@@ -1,6 +1,7 @@
 # C – Flight-loop workload audit
 
 **Issue:** #8 · **Runner:** Kimi · **Cross-review:** Claude (complete — verdict ACCEPT-WITH-NOTES; see §"Cross-review sign-off")
+**Status:** ready for PR review
 **Scope:** Per-frame cost inventory and pacing hypothesis for `MyFlightLoopCallback`. Read-only audit; no fixes, no catch-up, no sensor/param changes.
 
 ---
@@ -207,6 +208,22 @@ No sensor values, noise, calibration, PX4 params, or lockstep behavior may be ch
 * [x] Every per-frame operation in `MyFlightLoopCallback` classified by cost (cached / cheap / heavy / per-frame-string-lookup / syscall / config-dependent).
 * [x] Render-bound vs. plugin-bound vs. environment-bound question answered in principle, with the exact read-only instrumentation that will decide it specified.
 * [x] recv-drain / 255-byte question resolved: buffer is 256 bytes, recv length 255, no drain loop. MAVLink frame-splitting does **not** churn the parser or drop messages — per-channel state persists (`mavlink_reset_channel_status(MAVLINK_COMM_0)`, `MAVLinkManager.cpp:992`). Surviving risk is undrained recv backlog → lockstep round-trip latency.
+
+---
+
+## PR validation note
+
+This is a review/spec artifact for Issue #8. It does **not** require a live PX4/X-Plane diagnostic
+run before PR review because it changes no runtime behavior, PX4 params, sensor values, scheduler
+behavior, calibration, or diagnostics code. The later flight-loop instrumentation issue should
+consume the Q8 read-only timing spec and emit evidence under a dedicated diagnostic tag.
+
+Validation for this PR:
+- Source spot-checks: `MyFlightLoopCallback`, `DataRefManager` dataref lookup helpers,
+  `ConnectionManager::receiveData`, MAVLink parser reset path, `MAVLinkManager` send paths, and
+  runtime config defaults.
+- `python3 tools/validate_harness.py quick`
+- `python3 scripts/hitl_diagnostic_bundle.py --self-test`
 
 ---
 

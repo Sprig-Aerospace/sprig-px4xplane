@@ -9,11 +9,22 @@ This is an evidence gate before scheduler changes. Do not use this workflow to c
 - effective `config_name`
 - effective `mavlink_sensor_rate_hz`, `mavlink_gps_rate_hz`, `mavlink_state_rate_hz`, and `mavlink_rc_rate_hz`
 - `px4xplane` excerpts from X-Plane `Log.txt`
-- `HIL_SENSOR` send-rate lines when `debug_log_sensor_timing = true`
+- versioned `[RATE]` HIL_SENSOR send-rate and `estimated_fps` lines with `generation`,
+  `wall_time_usec`, count-over-wall-time `rate_hz`, and HIL_SENSOR dt p50/p95/max buckets;
+  emitted **unconditionally** every 1000 HIL_SENSOR messages, not gated by
+  `debug_log_sensor_timing`
+- `[TIMESTAMP_SUMMARY]` drift/delta lines with `generation`, `wall_time_usec`, and
+  wall-clock-referenced `drift_ms`; emitted **unconditionally** every 1000 sensor frames, not
+  gated by `debug_log_sensor_timing`
 - callback/FPS timing from structured `[TRANSPORT_EVENT]` lines
-- TimestampProvider drift/delta lines when `debug_log_sensor_timing = true`
 - transport/drop evidence including `send_backpressure`, `send_retry_limit`, `dropping this frame`, `send failure`, and `broken pipe`
+- a `session_boundary.json` file identifying the current PX4 session boundary
+- a `historical/` directory containing pre-boundary evidence excluded from current-readiness metrics
 - exact PX4 commands for the operator to run and paste into the bundle notes
+
+The bundle treats current-readiness evidence as lines at or after the latest `session_reset` for the highest `transport_generation`. Earlier lines are retained under `historical/` for forensics only.
+
+Invariant: a `stale_client_replaced` transport event is **always** classified as historical, never current. A stale replacement records the teardown of a prior transport session and is pre-boundary by definition, so it is routed to `historical/` unconditionally — even if a malformed or hostile log places it after the current-session boundary line. (An unknown-`diag_version` stale event is not trusted and is recorded as a version mismatch rather than current evidence.)
 
 ## Enable Log Evidence
 
@@ -23,7 +34,13 @@ For the diagnostic run only, set this in the installed plugin config:
 debug_log_sensor_timing = true
 ```
 
+`debug_log_sensor_timing = true` enables the per-frame detailed sensor-timing/drift lines.
+The summary `[RATE]` and `[TIMESTAMP_SUMMARY]` lines are emitted unconditionally every 1000
+frames regardless of this flag (see above), so they are present even on a default config.
+
 Do not change `mavlink_*_rate_hz`, PX4 params, TimestampProvider behavior, TCP behavior, or the HIL_SENSOR scheduler while collecting this evidence.
+
+For the accel-calibration poisoning A/B diagnostic, use [ACCEL_CALIBRATION_AB_PROTOCOL.md](ACCEL_CALIBRATION_AB_PROTOCOL.md). That protocol changes only existing config toggles and requires a fresh PX4 process and a fresh X-Plane process for Baseline, Run A, and Run B.
 
 ## Run The Bundle Script
 
@@ -72,6 +89,7 @@ ekf2 status
 - installed plugin path
 - installed `config.ini` hash/diff vs repo
 - X-Plane render FPS mean/min, if available
+- HIL_SENSOR count-over-wall-time rate and dt p50/p95/max buckets
 - whether X-Plane was paused, backgrounded, in menu, FPS-limited, or graphics-limited
 - PX4 effective `IMU_INTEG_RATE` after clamp
 - PX4 observed rates for `vehicle_imu`, `vehicle_acceleration`, and `vehicle_angular_velocity`

@@ -1,7 +1,7 @@
 # A — HITL Evidence Hygiene, Session Partitioning & Honest Metrics
 
-**Issue:** #6 · **Runner:** Claude · **Cross-review:** Kimi · **Status:** drafted (this is the
-evidence contract B/C/D are held against)
+**Issue:** #6 · **Runner:** Claude · **Cross-review:** Kimi · **Status:** ready for PR review
+(this is the evidence contract B/C/D are held against)
 **Scope:** diagnostic & reporting code paths ONLY. No behavioral/PX4-param changes. Spec, not patch.
 
 ---
@@ -256,6 +256,20 @@ This artifact is spec only. No fix implemented; no sensor value, noise, calibrat
 touched; no catch-up/multi-send/async proposed. The capture-offset change (§7) and the
 session-boundary parser change (§8.1) are described as **specs for a separate implementation
 ticket**, not applied. ✔
+
+---
+
+## 10.1 PR validation note
+
+This issue is a review/spec artifact, so it does not require a live PX4/X-Plane diagnostic run.
+Validation for the PR is limited to source inspection and the existing diagnostic bundle checks:
+
+```text
+python3 scripts/hitl_diagnostic_bundle.py --self-test
+python3 -m py_compile scripts/hitl_diagnostic_bundle.py
+```
+
+Both checks passed before opening the issue #6 PR.
 
 ---
 

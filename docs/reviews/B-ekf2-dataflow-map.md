@@ -1,6 +1,6 @@
 # B — PX4 Sensor → EKF2 Dataflow Map & Zero-Update Gate Identification
 
-**Issue:** #7 · **Runner:** Claude · **Cross-review:** Kimi · **Status:** drafted
+**Issue:** #7 · **Runner:** Claude · **Cross-review:** Kimi · **Status:** ready for PR review
 **Scope:** dataflow MAPPING and gate identification. No fixes, no param tuning. A model for the
 [DIAG] run (Issue E) to test.
 **Built on Issue A's evidence contract** — every "is it zero?" claim below must be read from
@@ -22,7 +22,7 @@ Those modules synthesize `sensor_gps`/`sensor_baro`/`sensor_mag` from **ground-t
 (`vehicle_local_position`, etc.) that a lockstep external simulator does **not** publish.
 
 **→ Hypotheses for EKF2 = 0 updates and missing `vehicle_global_position`
-(re-weighted after Kimi cross-review, see §8):**
+(re-weighted after Kimi cross-review, see §9):**
 - **PRIMARY — IMU-integration / validator / lockstep gates (gates 2–4).** Most consistent with the
   symptom "`sensor_accel`/`sensor_gyro`/`vehicle_imu`/`vehicle_gps_position` exist but EKF2 = 0
   updates": `vehicle_imu` exists but its callback never drives EKF2 (multi-instance init /
@@ -30,7 +30,7 @@ Those modules synthesize `sensor_gps`/`sensor_baro`/`sensor_mag` from **ground-t
   Issue D); or a lockstep/timestamp stall (gate 4, → Issue A's hardcoded-drift blind spot).
 - **SECONDARY — sensor-source contention (`SENS_EN_*SIM`).** The `sensor_*_sim` modules publish the
   same topics and `SensorBaroSim` collides on the **identical `device_id` 6620172** that
-  `simulator_mavlink` uses (Kimi §8.1 #2-3). BUT they are **dormant at cold startup** — they
+  `simulator_mavlink` uses (Kimi §9.1 #2-3). BUT they are **dormant at cold startup** — they
   publish only once `vehicle_global_position`/`vehicle_local_position` (EKF2 *outputs*) exist, which
   they don't yet. So they cannot be the *first* cause of zero updates; they are a genuine
   double-publisher/contention hazard **once EKF2 starts and the ground-truth loop closes**. Still
@@ -224,7 +224,7 @@ aiding-route/validator gates are.
 **Most likely (corrected after Kimi cross-review): gate 2–4 — IMU integration / validator latch /
 lockstep-timestamp stall**, NOT the SIM-module aiding-starvation originally proposed. Rationale:
 the `sensor_*_sim` modules are dormant at cold start (they need EKF2 outputs that don't exist yet,
-Kimi §8.1 #3,#6), so they cannot be the *first* failure. The symptom — `vehicle_imu` and
+Kimi §9.1 #3,#6), so they cannot be the *first* failure. The symptom — `vehicle_imu` and
 `vehicle_gps_position` exist but EKF2 = 0 updates with empty `estimator_status_flags`/
 `estimator_sensor_bias` — fits **(a)** `vehicle_imu` existing but its callback not driving EKF2
 (multi-instance selector failure, gate 2), **(b)** an IMU validator latch
@@ -271,7 +271,22 @@ flip the param. ✔
 
 ---
 
-## 8. Cross-review sign-off (Kimi)
+## 8. PR validation note
+
+This is a review/spec artifact for Issue #7. It does **not** require a live PX4/X-Plane diagnostic
+run before PR review because it changes no runtime behavior, PX4 params, sensor values, scheduler
+behavior, calibration, or diagnostics code. The next diagnostic-producing issue should consume the
+§5 command list and attach post-session-boundary PX4 evidence at connect / +5 s / +30 s.
+
+Validation for this PR:
+- Source/parameter spot-checks: `MAVLinkManager.cpp` HIL_SENSOR/HIL_GPS/HIL_STATE_QUATERNION paths,
+  `config/px4_params/*` EKF2/SENS/IMU settings, and existing diagnostics docs.
+- `python3 tools/validate_harness.py quick`
+- `python3 scripts/hitl_diagnostic_bundle.py --self-test`
+
+---
+
+## 9. Cross-review sign-off (Kimi)
 
 Cross-review performed against: `src/MAVLinkManager.cpp:375-497`, `:404-419`, `:554-611`, `:664-699`,
 `:77-82`, `:1086-1096`; `config/px4_params/*` (SYS_HITL, SENS_EN_*, EKF2_*, IMU_INTEG_RATE);
@@ -280,7 +295,7 @@ Cross-review performed against: `src/MAVLinkManager.cpp:375-497`, `:404-419`, `:
 `VehicleGPSPosition.cpp`, `SensorBaroSim.cpp`, `SensorGpsSim.cpp`, `SensorMagSim.cpp`,
 `src/drivers/drv_sensor.h`, `src/systemcmds/uorb/uorb.cpp`).
 
-### 8.1 Assumptions challenged
+### 9.1 Assumptions challenged
 
 | # | Artifact claim | Verdict | Evidence / reasoning |
 |---|----------------|---------|----------------------|
@@ -293,11 +308,11 @@ Cross-review performed against: `src/MAVLinkManager.cpp:375-497`, `:404-419`, `:
 | 7 | **`uorb status sensor_baro` / `uorb status vehicle_gps_position` are valid DIAG commands.** | **REFUTED**. | PX4 v1.14 `uorb_main()` accepts `uorb status` (no args) or `uorb top [filter...]` (`src/systemcmds/uorb/uorb.cpp`). Topic-specific status requires `uorb top -1 sensor_baro` (single-shot rate view) or `uorb status` for all topics. `uorb status <topic>` will error. |
 | 8 | **`fields_updated` bits 0–12 set matches PX4 expectation.** | **CONFIRMED** (identification only). | `MAVLinkManager.cpp:404-419` sets all HIL_SENSOR bits; `SimulatorMavlink::update_sensors()` masks against `SensorSource::ACCEL|GYRO|MAG|BARO|DIFF_PRESS`. The full set is accepted. The risk is not a missing bit but whether over-asserting `DIFF_PRESS`/`PRESSURE_ALT` every frame confuses downstream validation; this is noted in the artifact and is not a zero-update cause on its own. |
 
-### 8.2 Forbidden-change boundary intact?
+### 9.2 Forbidden-change boundary intact?
 
 **Y.** This review read source and parameters only; it proposes no code changes, no param tuning, no sensor-value/noise/calibration changes, and no catch-up/multi-send/async additions.
 
-### 8.3 Gaps the runner missed
+### 9.3 Gaps the runner missed
 
 1. **DIAG commands that will not run as written:** replace `uorb status sensor_baro` / `uorb status vehicle_gps_position` with `uorb top -1 sensor_baro`, `uorb top -1 vehicle_gps_position`, and a single `uorb status` dump.
 2. **Missing DIAG commands to disambiguate the SIM-module hypothesis:**
@@ -310,6 +325,6 @@ Cross-review performed against: `src/MAVLinkManager.cpp:375-497`, `:404-419`, `:
 3. **Mechanism refinement for §0:** the `sensor_*_sim` modules are a startup-*dormant* double-publisher hazard, not a startup-*starvation* hazard. The DIAG plan should capture `vehicle_air_data`, `vehicle_magnetometer`, and `vehicle_gps_position` at +5 s and +30 s; if they are empty while `sensor_baro`/`sensor_mag`/`sensor_gps` from `simulator_mavlink` are healthy, the first failure is in the sensors-module voter/aggregator (gate 3/4), not in the SIM modules. If `sensor_baro`/`sensor_mag` themselves are absent or dominated by `*_sim` publishers after EKF2 starts, then the SIM-module contention hypothesis is confirmed.
 4. **EKF2 input disambiguation:** add `param show EKF2_MULTI_IMU` / `param show SENS_IMU_MODE` to the DIAG list; if `EKF2_MULTI_IMU=0` and `SENS_IMU_MODE=1`, EKF2 falls back to `sensor_combined` and the vehicle_imu-centric gate table needs to be reinterpreted.
 
-### 8.4 Cross-review verdict
+### 9.4 Cross-review verdict
 
 **ACCEPT-WITH-NOTES.** The dataflow map and the `vehicle_imu` EKF2 input claim are correct for PX4 v1.14 multi-instance SITL. The gate table is a useful diagnostic scaffold but under-weights the IMU-integration/validator/lockstep gates and over-weights the SENS_EN_*SIM aiding-starvation hypothesis as the *first* failure. The SENS_EN_*SIM params are a real source of topic/device-id contention that the [DIAG] run must test, but the current symptom is more likely explained by gates 2–4 unless post-boundary evidence shows empty `vehicle_air_data`/`vehicle_magnetometer` while raw sensor topics are healthy. Fix the invalid `uorb status <topic>` commands and add the missing DIAG probes before Issue E consumes this artifact.
