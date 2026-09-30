@@ -17,26 +17,31 @@ retire the Actions workflow.
 
 ## Remaining #29 acceptance
 
-- Implemented locally: Git-shared explicit `release:prepare`, `release:stage-draft`
-  and `release:publish` tasks. They require a selected version tag at the exact
-  clean source commit, a passing macOS package report, and matching package
-  bytes. Draft creation and public publication each require the exact tag as
-  operator confirmation. Draft readback is checked before publication. The
-  former manual-dispatch `dev-YYYYMMDD-HHMMSS` tag is supported as an explicit
-  operator-selected prerelease tag.
-- Focused fixture qualification: `node --test tests/local-release.test.mjs` —
-  8 passed, 0 failed. It covers source/tag identity, unchanged package bytes,
-  dirty-source rejection, exact-tag confirmation, simulated draft/publish
-  readback, asset digest rejection and manual-dispatch prerelease tagging. This
-  is fixture evidence, not live GitHub authentication or publication.
-- Owner input still required: confirm an authorized GitHub credential route
-  for this repository's `contents:write` release operation. The helper clears
-  token environment variables before invoking GitHub CLI; the CLI uses its
-  configured local credential store. No token is printed or placed in plan or
-  report files. The host's previously checked GitHub CLI credential was
-  rejected, so no live attempt is claimed.
-- No production release has been staged or published. Do not invoke either
-  network task until the credential route and a release target are approved.
+- Implemented candidate: a Git-shared generator creates one immutable external
+  Pipeline workflow per selected tag, passing local package run and explicit
+  `stage` or `publish` operation. `check:fast` plans without network access;
+  reviewed `package` performs only that operation and retains a receipt;
+  `check` reads the remote tag/release/asset back. The source checkout must be
+  clean and tagged at the package run's exact commit. The retained Pipeline
+  package record, report and archive must agree on the macOS asset digest.
+  `dev-YYYYMMDD-HHMMSS` is an explicitly selected prerelease. Unlike the old
+  manual workflow, it is marked as a prerelease rather than an ordinary release.
+- Focused local qualification: `node --test tests/managed-release.test.mjs`
+  exercised the generator, tamper rejection, simulated draft/readback/publish,
+  and the selected native Pipeline runner's `check:fast`, `package`, `check`
+  with an isolated test trust identity and fake GitHub CLI. This verifies the
+  managed execution boundary and failure path, not actual GitHub publication.
+- The authenticated host CLI read route works, but the original Task labels
+  could not run in the selected native runner, and its isolated HOME could not
+  read that login. The generated workflow uses the runner's supported finite
+  entries and passes explicitly reviewed host/config directory paths only to
+  the `gh` child. Token variables are removed; no token bytes enter Task input,
+  source, reports or logs. Live release-write scope and credential availability
+  in the selected managed process are still unverified.
+- No production release has been staged or published. A final source-bound
+  macOS package run, exact pushed tag, reviewed workflow trust and explicit
+  owner authorization for the target draft/publication are required before a
+  real write. No fixture result stands in for that readback.
 - Keep `.github/workflows/release.yml` enabled until the local operation,
   explicit publication/readback contract, trigger/status disposition, and
   required review are accepted. Preserve the separate product release policy.
