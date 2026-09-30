@@ -63,3 +63,35 @@ Install CMake, the X-Plane SDK inputs already tracked by this repository, the
 pinned Task tool and platform compiler/linker dependencies before setup. The
 workflow does not run privileged system package managers. Windows/Linux require
 their own supported local profiles and qualification before being claimed.
+
+## Explicit local release workflow
+
+The separate `release.yml` replacement runs only after the operator selects a
+version tag on the exact clean source commit. It builds and verifies the macOS
+arm64 package, checks that the package bytes match Pipeline's passing package
+report, and writes a local release plan. Use a pushed version tag whose commit
+is the current checkout:
+
+```sh
+task -t pipeline/workflows/local-build/Taskfile.yml release:prepare VERSION=v1.2.3
+task -t pipeline/workflows/local-build/Taskfile.yml release:stage-draft VERSION=v1.2.3 CONFIRM=v1.2.3
+task -t pipeline/workflows/local-build/Taskfile.yml release:publish VERSION=v1.2.3 CONFIRM=v1.2.3
+```
+
+`release:stage-draft` uploads only the qualified macOS arm64 archive and reads
+the draft back from GitHub. `release:publish` verifies the source commit and
+asset digest recorded in that draft against the remote tag before making the
+release public and reading it back again.
+The exact tag must appear twice as an explicit operator confirmation. Ordinary
+`check` and `package` tasks do not invoke GitHub. The publisher removes token
+environment variables before starting GitHub CLI, which uses its configured
+local credential store. No token is printed, placed in arguments or added to
+the plan/report. The host's previously checked GitHub CLI credential was
+rejected, so no live publication or readback has been qualified.
+
+These tasks are implementation candidates for review; no release was staged or
+published. Keep `.github/workflows/release.yml` enabled until the local tasks
+pass required review, an authorized local credential route is confirmed, and
+applicable preflight/draft/readback evidence is accepted. Windows/Linux and
+universal release assets remain deferred by the owner decision recorded for
+#28.
