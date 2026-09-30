@@ -42,9 +42,11 @@ function fixture(t) {
   const artifact = path.join(run, 'package/artifact');
   fs.writeFileSync(artifact, 'qualified macOS package');
   const asset = {bytes: fs.statSync(artifact).size, sha256: fileSha(artifact)};
-  fs.writeFileSync(path.join(run, 'record.json'), JSON.stringify({task: 'package', outcome: 'passed',
+  const record = {task: 'package', outcome: 'passed',
     category: 'passed', releaseEligible: true, source: {clean: true, commit},
-    package: {name: 'px4xplane-ci-mac.tar.gz', ...asset}}));
+    package: {name: 'px4xplane-ci-mac.tar.gz', ...asset}};
+  record.recordSha256 = sha(Buffer.from(JSON.stringify(record)));
+  fs.writeFileSync(path.join(run, 'record.json'), JSON.stringify(record));
   fs.writeFileSync(path.join(run, 'reports/package/plugin-build.json'), JSON.stringify({outcome: 'passed',
     platform: 'mac', assertions: 5, artifact: {path: '.pipeline-state/packages/px4xplane-ci-mac.tar.gz', ...asset}}));
   const taskBinary = process.env.PIPELINE_TEST_TASK ?? path.join(root, 'task');
@@ -119,10 +121,19 @@ test('generation rejects a different package source and a dirty release checkout
   const f = fixture(t);
   const recordPath = path.join(f.run, 'record.json'), record = JSON.parse(fs.readFileSync(recordPath));
   record.source.commit = '0'.repeat(40);
+  delete record.recordSha256; record.recordSha256 = sha(Buffer.from(JSON.stringify(record)));
   fs.writeFileSync(recordPath, JSON.stringify(record));
   assert.throws(() => generate([f.source, f.run, 'v1.2.3', path.join(f.root, 'wrong'),
     'stage', f.taskBinary]), /selected source/);
   record.source.commit = f.commit;
+  delete record.recordSha256; record.recordSha256 = sha(Buffer.from(JSON.stringify(record)));
+  fs.writeFileSync(recordPath, JSON.stringify(record));
+  record.package.bytes += 1;
+  fs.writeFileSync(recordPath, JSON.stringify(record));
+  assert.throws(() => generate([f.source, f.run, 'v1.2.3', path.join(f.root, 'corrupt'),
+    'stage', f.taskBinary]), /record integrity check failed/);
+  record.package.bytes -= 1;
+  delete record.recordSha256; record.recordSha256 = sha(Buffer.from(JSON.stringify(record)));
   fs.writeFileSync(recordPath, JSON.stringify(record));
   fs.writeFileSync(path.join(f.source, 'new-untracked.txt'), 'dirty');
   assert.throws(() => generate([f.source, f.run, 'v1.2.3', path.join(f.root, 'dirty'),

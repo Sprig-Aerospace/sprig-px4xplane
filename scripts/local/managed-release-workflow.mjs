@@ -36,6 +36,9 @@ function packageEvidence(runDirectory, expectedCommit, expectedRecordSha) {
   requireTrue(fs.lstatSync(recordPath).isFile(), 'Package record must be a regular file.');
   requireTrue(fileSha(recordPath) === expectedRecordSha, 'Package run record changed after selection.');
   const record = readJson(recordPath);
+  const sealed = {...record}; delete sealed.recordSha256;
+  requireTrue(hex(record.recordSha256, 64) && record.recordSha256 === sha(Buffer.from(JSON.stringify(sealed))),
+    'Package run record integrity check failed.');
   requireTrue(record.task === 'package' && record.outcome === 'passed' && record.category === 'passed' &&
     record.releaseEligible === true && record.source?.clean === true && record.source?.commit === expectedCommit,
   'Package run is not a passing, clean build of the selected source.');
@@ -70,8 +73,10 @@ function generate([sourceArg, runArg, tag, workflowArg, action, taskArg, ...opti
     'Usage: generate SOURCE PACKAGE_RUN TAG NEW_WORKFLOW stage|publish TASK_BINARY [--auth-home PATH] [--gh-config-dir PATH]');
   requireTrue(validTag(tag), 'Select a version or explicit dev prerelease tag.');
   const source = fs.realpathSync(sourceArg), run = fs.realpathSync(runArg);
-  const workflow = path.resolve(workflowArg), task = fs.realpathSync(taskArg);
-  requireTrue(!fs.existsSync(workflow) && !workflow.startsWith(`${source}${path.sep}`),
+  const requestedWorkflow = path.resolve(workflowArg);
+  const workflow = path.join(fs.realpathSync(path.dirname(requestedWorkflow)), path.basename(requestedWorkflow));
+  const task = fs.realpathSync(taskArg);
+  requireTrue(!fs.existsSync(workflow) && workflow !== source && !workflow.startsWith(`${source}${path.sep}`),
     'Choose a new workflow directory outside the source checkout.');
   requireTrue(!git(source, 'status', '--porcelain', '--untracked-files=normal'), 'Source checkout must be clean.');
   requireTrue(git(source, 'rev-parse', '--is-shallow-repository') === 'false', 'Full source history is required for release notes.');
@@ -86,6 +91,8 @@ function generate([sourceArg, runArg, tag, workflowArg, action, taskArg, ...opti
     requireTrue(!auth[key], 'Duplicate credential route option.');
     auth[key] = fs.realpathSync(options[i + 1]);
     requireTrue(fs.statSync(auth[key]).isDirectory(), 'Credential route must be an existing directory.');
+    requireTrue(auth[key] !== source && !auth[key].startsWith(`${source}${path.sep}`),
+      'Credential route must remain outside the source checkout.');
   }
   const releaseNotes = notes(source, tag, commit, asset.sha256);
   const request = {schemaVersion: 1, repository, tag, sourceCommit: commit, action,
