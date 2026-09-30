@@ -52,7 +52,7 @@ This project establishes a robust connection between X-Plane and PX4 SITL (Softw
 #### 🤖 Development & CI/CD
 
 - **🤖 Automated CI/CD System**: GitHub Actions workflows for cross-platform builds:
-  - Automatic builds on every push to master (Windows, Linux, macOS in parallel)
+  - Automatic builds for pull requests targeting master (Windows, Linux, macOS in parallel)
   - Automated releases with pre-built binaries via version tags
   - 90-day artifact retention for testing builds
   - Real-time build status badges on README
@@ -269,7 +269,7 @@ All platforms are automatically built and tested via GitHub Actions CI/CD on eve
 
 **For Contributors:**
 - Work on `master` branch for regular development
-- Push to `master` triggers builds (artifacts kept 90 days)
+- Open a pull request targeting `master` to trigger builds (artifacts kept 90 days); the build workflow also supports manual dispatch
 - Create version tag (`v3.1.0`) to trigger automatic release with binaries
 
 📖 **For complete developer workflow, versioning, and CI/CD**, see **[Developer Guide](docs/DEVELOPER.md)**.
