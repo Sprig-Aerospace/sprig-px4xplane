@@ -33,6 +33,8 @@ test('release preflight binds a clean tagged source to passing macOS package byt
   assert.equal(plan.repository, 'Sprig-Aerospace/sprig-px4xplane');
   assert.equal(plan.tag, 'v1.2.3');
   assert.equal(plan.asset.sha256, sha(fs.readFileSync(f.artifactPath)));
+  assert.equal(plan.notesSha256, sha(fs.readFileSync(path.join(f.root, '.pipeline-state/reports/release/release-notes.md'))));
+  assert.match(fs.readFileSync(path.join(f.root, '.pipeline-state/reports/release/release-notes.md'), 'utf8'), /sprig-package source=/);
   assert.match(fs.readFileSync(path.join(f.root, '.pipeline-state/reports/release/release-plan.json'), 'utf8'), /draft-only-until-explicit-confirmation/);
 });
 
