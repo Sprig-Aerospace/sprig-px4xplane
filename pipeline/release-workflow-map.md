@@ -50,3 +50,20 @@ The existing package receipt in
 `/Users/briankeeley/sprig/audit-reports/px4xplane-cutover-99e4e82-2026-09-30/README.md`
 qualifies only its exact local macOS arm64 package candidate. It is not a
 release-publication receipt.
+
+## Draft readback and recovery
+
+GitHub can return 404 from the release-by-tag endpoint for an unpublished draft.
+The local publisher resolves the exact tag through the authenticated release
+list and then reads the selected release ID. A retry of `stage` reuses only a
+draft whose tag, source, notes, prerelease flag and sole asset match the reviewed
+request. It never overwrites an existing release. A mismatched or published
+release fails closed; inspect it before choosing any separate corrective action.
+
+The October 2 managed attempt created draft release `401686395` for
+`dev-20260930-225214` and uploaded the qualified 164,807-byte macOS asset, then
+failed in its old tag-based readback. Authenticated listing/readback verifies the
+actual draft and digest. [The retained evidence](../docs/evidence/pipeline-draft-readback-2026-10-02.json)
+separates that remote write, the failed native result, focused repair tests and
+remaining managed recovery. Do not retry the old publisher or treat the draft
+as publicly published. `release.yml` remains enabled.

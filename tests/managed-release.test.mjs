@@ -65,9 +65,15 @@ function fakeGh(f) {
   fs.writeFileSync(path.join(bin, 'gh'), `#!/usr/bin/env node
 const fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto');
 const args = process.argv.slice(2), state = ${JSON.stringify(state)}, commit = ${JSON.stringify(f.commit)};
+fs.appendFileSync(state + '.commands', JSON.stringify(args) + '\\n');
 if (process.env.GH_TOKEN || process.env.GITHUB_TOKEN || process.env.GH_ENTERPRISE_TOKEN || process.env.GITHUB_OAUTH_TOKEN) process.exit(41);
 if (args[0] === 'api' && args[1].includes('/commits/')) { process.stdout.write(JSON.stringify({sha: commit})); process.exit(0); }
-if (args[0] === 'api' && args[1].includes('/releases/tags/')) {
+if (args[0] === 'api' && args.includes('--paginate')) {
+  if (fs.existsSync(state)) process.stdout.write('123');
+  process.exit(0);
+}
+if (args[0] === 'api' && args[1].includes('/releases/tags/')) process.exit(42);
+if (args[0] === 'api' && args[1].endsWith('/releases/123')) {
   if (!fs.existsSync(state)) process.exit(42);
   process.stdout.write(fs.readFileSync(state)); process.exit(0);
 }
@@ -75,7 +81,7 @@ if (args[0] === 'release' && args[1] === 'create') {
   if (fs.existsSync(state)) process.exit(43);
   const tag = args[2], asset = args[3], notes = fs.readFileSync(args[args.indexOf('--notes-file') + 1], 'utf8');
   const bytes = fs.readFileSync(asset);
-  fs.writeFileSync(state, JSON.stringify({tag_name: tag, draft: true,
+  fs.writeFileSync(state, JSON.stringify({id: 123, tag_name: tag, draft: true, prerelease: args.includes('--prerelease'),
     html_url: 'https://example.invalid/release/' + tag, body: notes,
     assets: [{name: path.basename(asset), size: bytes.length,
       digest: 'sha256:' + crypto.createHash('sha256').update(bytes).digest('hex')}]}));
@@ -154,11 +160,30 @@ test('explicit draft, remote readback and publication use only selected fixture 
     process.env.PIPELINE_WORKFLOW_DIR = stage;
     assert.equal(execute('package').remote.draft, true);
     assert.equal(execute('check').remote.draft, true);
+    const original = fs.readFileSync(fake.state, 'utf8');
+    // Recover the real create-success/readback-failure case without a second write.
+    assert.equal(execute('package').remote.id, 123);
+    assert.equal(fs.readFileSync(fake.state, 'utf8'), original);
+    const corrupt = JSON.parse(original); corrupt.assets[0].digest = 'sha256:' + '0'.repeat(64);
+    fs.writeFileSync(fake.state, JSON.stringify(corrupt));
+    assert.throws(() => execute('package'), /differs from the selected candidate/);
+    assert.deepEqual(JSON.parse(fs.readFileSync(fake.state)), corrupt);
+    const editedNotes = JSON.parse(original); editedNotes.body += 'unreviewed text';
+    fs.writeFileSync(fake.state, JSON.stringify(editedNotes));
+    assert.throws(() => execute('package'), /differs from the selected candidate/);
+    assert.deepEqual(JSON.parse(fs.readFileSync(fake.state)), editedNotes);
+    fs.writeFileSync(fake.state, original);
     const publish = path.join(f.root, 'publish');
     generate([f.source, f.run, 'v1.2.3', publish, 'publish', f.taskBinary]);
     process.env.PIPELINE_WORKFLOW_DIR = publish;
     assert.equal(execute('package').remote.draft, false);
     assert.equal(execute('check').remote.draft, false);
+    process.env.PIPELINE_WORKFLOW_DIR = stage;
+    assert.throws(() => execute('package'), /differs from the selected candidate/);
+    const commands = fs.readFileSync(fake.state + '.commands', 'utf8').trim().split('\n').map(JSON.parse);
+    assert.equal(commands.filter(args => args[0] === 'release' && args[1] === 'create').length, 1);
+    assert.equal(commands.filter(args => args[0] === 'release' && args[1] === 'edit').length, 1);
+    assert.equal(commands.some(args => args.some(arg => arg.includes('/releases/tags/'))), false);
     const remote = JSON.parse(fs.readFileSync(fake.state));
     assert.equal(remote.assets[0].digest, `sha256:${f.asset.sha256}`);
   } finally {

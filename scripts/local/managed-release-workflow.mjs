@@ -137,17 +137,33 @@ function gh(args, request) {
   return result.stdout.trim();
 }
 
-function remoteRelease(request, expectedDraft) {
-  const release = JSON.parse(gh(['api', `repos/${repository}/releases/tags/${request.tag}`], request));
+function remoteReleaseId(request) {
+  // The tag endpoint can return 404 for a draft. Authenticated release listings
+  // include drafts; select an exact tag, then read that immutable release ID.
+  const ids = gh(['api', '--paginate', `repos/${repository}/releases?per_page=100`,
+    '--jq', `.[] | select(.tag_name == ${JSON.stringify(request.tag)}) | .id`], request)
+    .split('\n').filter(Boolean);
+  requireTrue(ids.length <= 1 && ids.every(id => /^[1-9][0-9]*$/.test(id)),
+    'Remote release tag lookup is ambiguous or invalid.');
+  return ids[0] ?? null;
+}
+
+function remoteRelease(request, expectedDraft, id = remoteReleaseId(request)) {
+  requireTrue(id !== null, 'Selected remote release does not exist.');
+  const release = JSON.parse(gh(['api', `repos/${repository}/releases/${id}`], request));
   const asset = (release.assets ?? []).find(item => item.name === packageName);
   const remoteCommit = JSON.parse(gh(['api', `repos/${repository}/commits/${request.tag}`], request)).sha;
   requireTrue(remoteCommit === request.sourceCommit && release.tag_name === request.tag &&
     typeof release.html_url === 'string' && release.html_url.startsWith('https://') &&
-    release.draft === expectedDraft && asset?.size === request.asset.bytes &&
+    release.draft === expectedDraft && release.assets.length === 1 &&
+    release.prerelease === (request.tag.startsWith('dev-') || /alpha|beta|rc/.test(request.tag)) &&
+    typeof release.body === 'string' && sha(Buffer.from(release.body)) === request.notesSha256 &&
+    asset?.size === request.asset.bytes &&
     asset?.digest === `sha256:${request.asset.sha256}` &&
     release.body?.includes(`<!-- sprig-package source=${request.sourceCommit} sha256=${request.asset.sha256} -->`),
   'Remote release, tag, notes or package digest differs from the selected candidate.');
-  return {url: release.html_url, draft: release.draft, asset: asset.name};
+  requireTrue(String(release.id) === id, 'Remote release ID changed during readback.');
+  return {id: release.id, url: release.html_url, draft: release.draft, asset: asset.name};
 }
 
 function execute(entry) {
@@ -171,18 +187,25 @@ function execute(entry) {
     const remoteCommit = JSON.parse(gh(['api', `repos/${repository}/commits/${request.tag}`], request)).sha;
     requireTrue(remoteCommit === request.sourceCommit, 'Remote tag does not select the qualified source.');
     if (request.action === 'stage') {
-      const packageDir = path.join(source, '.pipeline-state/packages');
-      fs.mkdirSync(packageDir, {recursive: true});
-      const selectedAsset = path.join(packageDir, packageName);
-      fs.copyFileSync(asset.artifact, selectedAsset);
-      requireTrue(fileSha(selectedAsset) === asset.sha256, 'Selected package changed during copy.');
-      const notesFile = path.join(packageDir, 'release-notes.md');
-      fs.writeFileSync(notesFile, request.notes, {mode: 0o600});
-      const args = ['release', 'create', request.tag, selectedAsset, '--repo', repository,
-        '--title', `px4xplane ${request.tag}`, '--notes-file', notesFile, '--draft', '--verify-tag'];
-      if (request.tag.startsWith('dev-') || /alpha|beta|rc/.test(request.tag)) args.push('--prerelease');
-      gh(args, request);
-      remote = remoteRelease(request, true);
+      const existing = remoteReleaseId(request);
+      if (existing !== null) {
+        // A previous create may have succeeded before readback failed. Reuse
+        // only the exact matching draft; never overwrite or publish it here.
+        remote = remoteRelease(request, true, existing);
+      } else {
+        const packageDir = path.join(source, '.pipeline-state/packages');
+        fs.mkdirSync(packageDir, {recursive: true});
+        const selectedAsset = path.join(packageDir, packageName);
+        fs.copyFileSync(asset.artifact, selectedAsset);
+        requireTrue(fileSha(selectedAsset) === asset.sha256, 'Selected package changed during copy.');
+        const notesFile = path.join(packageDir, 'release-notes.md');
+        fs.writeFileSync(notesFile, request.notes, {mode: 0o600});
+        const args = ['release', 'create', request.tag, selectedAsset, '--repo', repository,
+          '--title', `px4xplane ${request.tag}`, '--notes-file', notesFile, '--draft', '--verify-tag'];
+        if (request.tag.startsWith('dev-') || /alpha|beta|rc/.test(request.tag)) args.push('--prerelease');
+        gh(args, request);
+        remote = remoteRelease(request, true);
+      }
     } else {
       remoteRelease(request, true);
       gh(['release', 'edit', request.tag, '--repo', repository, '--draft=false'], request);
