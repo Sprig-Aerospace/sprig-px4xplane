@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import {spawnSync} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
 
 const repository = 'Sprig-Aerospace/sprig-px4xplane';
 const packageName = 'px4xplane-ci-mac.tar.gz';
@@ -233,7 +234,7 @@ function execute(entry) {
 }
 
 export {generate, execute};
-if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve('scripts/local/managed-release-workflow.mjs')) {
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const command = process.argv[2];
   const result = command === 'generate' ? generate(process.argv.slice(3)) :
     command === 'execute' ? execute(process.argv[3]) : null;

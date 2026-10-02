@@ -209,6 +209,14 @@ test('the selected native Pipeline runner executes the finite local plan', t => 
     return JSON.parse(result.stdout);
   };
   assert.equal(runner('run', f.source, 'check:fast', '600').outcome, 'passed');
+  // A reviewed publisher repair can run from the external workflow while the
+  // already-qualified product source/package remains immutable.
+  fs.copyFileSync(new URL('../scripts/local/managed-release-workflow.mjs', import.meta.url),
+    path.join(workflow, 'scripts/managed-release-workflow.mjs'));
+  const taskfile = path.join(workflow, 'Taskfile.yml');
+  fs.writeFileSync(taskfile, fs.readFileSync(taskfile, 'utf8').replaceAll(
+    '$PIPELINE_SOURCE_DIR/scripts/local/managed-release-workflow.mjs',
+    '$PIPELINE_WORKFLOW_DIR/scripts/managed-release-workflow.mjs'));
   // Approval below is limited to a generated, isolated test identity with fake gh.
   const inspect = runner('onboarding', 'inspect', f.source);
   assert.equal(inspect.state, 'needs-trust');

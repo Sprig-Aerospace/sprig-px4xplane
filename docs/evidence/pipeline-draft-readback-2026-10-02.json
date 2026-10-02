@@ -28,15 +28,15 @@
   },
   "diagnosis": "Existing Keychain-backed host/config route works inside native Pipeline, including release write. No new credential is needed. Draft listing includes the release; release-by-ID read succeeds.",
   "repair": "Resolve exact tag via authenticated paginated listing, reject ambiguous IDs, read the selected release by ID, and reuse an already matching draft without another create. Reject modified notes/assets, extra assets, prerelease mismatch or a published release.",
-  "implementationSha256": "5ee4bfb37ae4ae82e5c42ed97ae21b122f4ca73c206c8f9f3a65ea729535769c",
+  "implementationSha256": "f03c93f1ae8efc5f00b33388a4405df9393f124623ab8b9a2e66f793eff9c1c0",
   "focusedQualification": {
     "tests": 4,
     "passed": 4,
     "skipped": 0,
     "runnerSha256": "97253c8f7ed4387d4d2fac13d419b00b72446c8ef9a4776350d75812637ed0d2",
     "taskSha256": "0ae7ed97e58b0b2f7038cee1080e8a4a9d78f3afd0aeace0b5bc8d133ccb0a25",
-    "scope": "fake-GitHub success/retry/rejection cases and real native fixture plan/package/readback/tamper rejection; not live remote acceptance",
-    "logSha256": "1ebf6d190fa502fdc9a23a200a7a691ed1939e25cab277ae19a6316c03ccadea"
+    "scope": "Fake-GitHub success/retry/rejection cases and real native fixture plan/package/readback/tamper rejection, including an external publisher helper with immutable product source. Not live remote acceptance.",
+    "logSha256": "5fe011e23f126f22aadcc086768e943b3f2faf7553ce558827529fb93861cca5"
   },
   "remaining": [
     "Apply the exact repaired orchestration under reviewed Pipeline trust to the unchanged approved product candidate.",
