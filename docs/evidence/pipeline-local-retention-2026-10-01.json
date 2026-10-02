@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "issue": "sprig-px4xplane#28",
+  "scope": "Explicit native cancellation/replace and >=90-day local archive; fixture execution is not product package qualification",
+  "ownerDecision": "2026-10-01: approved explicit local replacement, >=90-day local retention, retired automatic GitHub supersession and hosted/shared artifact page; Windows/Linux/universal distribution remains deferred",
+  "runner": {
+    "source": "5d97317cbd6bfa003739daa356df738b53e289bd",
+    "sha256": "97253c8f7ed4387d4d2fac13d419b00b72446c8ef9a4776350d75812637ed0d2",
+    "path": "/Users/briankeeley/sprig/.sprig-rollout-qualification/pipeline-main-5d97317-runner/pipeline"
+  },
+  "task": {
+    "version": "3.53.1",
+    "sha256": "0ae7ed97e58b0b2f7038cee1080e8a4a9d78f3afd0aeace0b5bc8d133ccb0a25"
+  },
+  "implementationInputs": {
+    "scripts/local/retained-run.py": "cce1ef7973a4ac0e8547eeb64865e4142e17e9affb0911991f4b1e12435546db",
+    "tests/test_retained_run.py": "eee0aef83b367b8a7219a2099b68e903eac7d1e24f4407a8913afb2fc655840e"
+  },
+  "focusedSuite": {
+    "passed": 8,
+    "nativeFixtureTests": 2,
+    "logSha256": "06dac159db17a0044e8eeeb72711f10204c869b06e99cef51a339a8e9440dfdf",
+    "checks": [
+      "native owned-child cancellation and replacement",
+      "different workflow cancellation rejected",
+      "competing helpers/archivers serialize transitions and preserve records",
+      "native fixture package and readback",
+      "stale result never accepted",
+      "90-day boundary preserves old records before/at/after deadline",
+      "storage failure preserves native evidence",
+      "tampered/symlinked/foreign archive inputs rejected"
+    ]
+  },
+  "actualHistoricalPackageReadback": {
+    "source": "9dbb408e7e062134c1a7ac2c4c43225e1efa903d",
+    "runId": "1790808674908-28172",
+    "bytes": 164807,
+    "sha256": "8533d4c5ee3f57335c92dc3ea5ed984c50a75d15da14c1db86c03084303fa557",
+    "archivePath": "/Users/briankeeley/sprig/pipeline-artifact-archive/px4xplane/06d69c12f32b95df3c3a270e3933b181c35998da1fcecbd5eb88d86ea64af0e4/1790808674908-28172",
+    "manifestSha256": "b04b23e71d26f86570a528ea02b5683758e09365367971fb3044a709fd476f88",
+    "archivedAtEpoch": 1790895475,
+    "retainUntilEpoch": 1798671475,
+    "scope": "Historical actual product bytes verified without rebuild; not qualification of the new candidate"
+  },
+  "remaining": "Final exact product candidate invocation through the helper requires current workflow trust. Cutover is not accepted until that receipt passes; keep published Actions until then."
+}
