@@ -180,11 +180,15 @@ The selected credential directories are passed only to the GitHub CLI child.
 Ambient token variables are removed. No token is placed in the workflow,
 Task environment, logs or source. The ordinary build/check/package workflow
 has no remote publication step. Pipeline's local workflow trust review is
-required before either remote `package` action. Authentication in Pipeline's
-isolated process and release-write scope remain to be qualified; host CLI read
-access does not establish them.
+required before either remote `package` action. The exact native credential
+route, draft recovery, public development-prerelease publication, byte readback
+and a deliberate wrong-state failure are now qualified; see
+[the source-bound release receipt](../docs/evidence/pipeline-release-acceptance-2026-10-02.json).
 
-No release was staged or published by this candidate. Keep
-`.github/workflows/release.yml` enabled until required review, managed
-execution, authorized draft/publication and readback pass. Windows/Linux and
-universal release assets remain deferred by the owner decision recorded for #28.
+Both former Actions workflows are retired. A push, PR, version tag or manual
+GitHub dispatch no longer starts a build or publishes a release. Use the
+explicit local operations above; use the same qualified CLI, workflow and
+`PIPELINE_HOME` when reading results. Windows/Linux/universal distribution
+remains deferred; local macOS arm64 qualification is the current supported
+profile. Future releases still require selecting and authorizing their exact
+source, passing package, tag and publication request.

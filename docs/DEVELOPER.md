@@ -19,12 +19,12 @@ git checkout -b feature/my-feature
 git add .
 git commit -m "Add feature: description"
 
-# 4. Push to master (triggers builds, no release)
+# 4. Push reviewed work (does not start an automatic build/release)
 git checkout master
 git merge feature/my-feature
 git push origin master
-# → GitHub Actions builds Windows, Linux, macOS
-# → Artifacts available for 90 days
+# Run the local Pipeline workflow and retain its records for at least 90 days.
+# See pipeline/README.md for exact commands.
 
 # 5. When ready to release:
 # Update version numbers (see Versioning below)
@@ -32,7 +32,7 @@ git add include/VersionInfo.h CMakeLists.txt CHANGELOG.md
 git commit -m "Release vX.Y.Z: description"
 git tag -a vX.Y.Z -m "Release vX.Y.Z: description"
 git push origin master && git push origin vX.Y.Z
-# → Automatic GitHub Release with binaries
+# Select the passing local package, then explicitly stage/review/publish in Pipeline.
 ```
 
 ---
@@ -82,50 +82,24 @@ git tag -a v3.1.0 -m "Release v3.1.0: Feature name"
 git push origin master
 git push origin v3.1.0
 
-# 4. Monitor release
-# → https://github.com/alireza787b/px4xplane/actions
-# → Builds take 5-15 minutes
-# → Release created automatically with 3 platform binaries
+# 4. Explicitly run the reviewed Pipeline stage/publish tasks (pipeline/README.md).
+# Inspect local run receipts and remote download readback.
 ```
 
 ---
 
-## CI/CD (GitHub Actions)
+## Local CI/CD (Pipeline)
 
-### Workflow Triggers
+Follow [the operator runbook](../pipeline/README.md) for exact build/package,
+run/replace/cancel, result inspection, 90-day local retention and separate
+stage/publish commands. [The release map](../pipeline/release-workflow-map.md)
+records the former workflow and verified replacement.
 
-| Trigger | Branch/Tag | Result |
-|---------|-----------|--------|
-| Push to `master` | - | Build all platforms (no release) |
-| Push tag `v*.*.*` | - | Build + Create GitHub Release |
-| Manual | Any | Can trigger from Actions tab |
-
-### Build Outputs
-
-**Artifacts** (90-day retention):
-- `px4xplane-windows.zip` (x64)
-- `px4xplane-linux.zip` (x64)
-- `px4xplane-macos.zip` (Universal: Intel + Apple Silicon)
-
-**Structure** (identical on all platforms):
-```
-px4xplane/
-├── 64/
-│   ├── {platform}.xpl
-│   └── config.ini
-├── px4_airframes/
-│   ├── 5001_xplane_cessna172
-│   ├── 5002_xplane_tb2
-│   ├── 5010_xplane_ehang184
-│   ├── 5020_xplane_alia250
-│   └── 5021_xplane_qtailsitter
-└── README.md
-```
-
-### Workflow Files
-
-- `.github/workflows/build.yml` - Continuous integration (builds on push to master)
-- `.github/workflows/release.yml` - Release automation (builds + GitHub Release on tag)
+PR/push/tag/manual GitHub Actions triggers and forge checks are retired. A tag
+alone does not publish. The claimed local profile is macOS 26.4.1 arm64; Windows,
+Linux and universal distribution are deferred, with source support preserved.
+The local artifact is `px4xplane-ci-mac.tar.gz`, containing the `px4xplane/`
+plugin tree. No hosted service or separately provisioned runner is required.
 
 ---
 
@@ -230,17 +204,17 @@ tree build/{platform}/Release/px4xplane
 
 ### Build Fails in CI/CD
 
-1. Check GitHub Actions logs: https://github.com/alireza787b/px4xplane/actions
+1. Inspect the selected Pipeline run with `status SOURCE RUN_ID` and `log SOURCE RUN_ID`, using the same workflow and state directory.
 2. Identify failing platform (Windows/Linux/macOS)
 3. Test locally on that platform
 4. Fix and push
 
 ### Release Created But Missing Binaries
 
-1. Check "build-and-upload" job in workflow
+1. Check the source-bound local package record, retained artifact and managed publisher receipt
 2. Look for ZIP packaging errors
 3. Verify artifact upload step succeeded
-4. If needed, manually upload ZIPs to release
+4. Reconcile the exact remote state before retrying; do not overwrite assets to force acceptance.
 
 ### Wrong Version Number
 
