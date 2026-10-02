@@ -1,8 +1,8 @@
 # PX4XPlane `release.yml` workflow map
 
 Source: published `master` at `b1969bf0050dd8e6e1a4393403e53db64b7b0240`.
-This is an inventory and local handoff only; it does not qualify publication or
-retire the Actions workflow.
+The original contract below is retained for comparison. The local replacement
+and explicit retirement are accepted by the evidence at the end of this page.
 
 | Existing behavior | Exact contract / local disposition |
 | --- | --- |
@@ -15,55 +15,56 @@ retire the Actions workflow.
 | Local replacement today | `pipeline/workflows/local-build` provides explicit `check:fast`, `check`, and `package` tasks. Results and package bytes remain in the local Pipeline run for review. It does not create a GitHub Release or upload assets. Its current qualified profile is macOS 26.4.1 arm64 only. |
 | Current owner disposition | On 2026-09-30 the owner accepted deferring Windows/Linux/universal outputs as future distribution work, preserving their source/build support. That decision is recorded for #28. It does not qualify or authorize publishing a macOS release. |
 
-## Remaining #29 acceptance
+## Accepted local replacement — 2026-10-02
 
-- Implemented candidate: a Git-shared generator creates one immutable external
-  Pipeline workflow per selected tag, passing local package run and explicit
-  `stage` or `publish` operation. `check:fast` plans without network access;
-  reviewed `package` performs only that operation and retains a receipt;
-  `check` reads the remote tag/release/asset back. The source checkout must be
-  clean and tagged at the package run's exact commit. The retained Pipeline
-  package record, report and archive must agree on the macOS asset digest.
-  `dev-YYYYMMDD-HHMMSS` is an explicitly selected prerelease. Unlike the old
-  manual workflow, it is marked as a prerelease rather than an ordinary release.
-- Focused local qualification: `node --test tests/managed-release.test.mjs`
-  exercised the generator, tamper rejection, simulated draft/readback/publish,
-  and the selected native Pipeline runner's `check:fast`, `package`, `check`
-  with an isolated test trust identity and fake GitHub CLI. This verifies the
-  managed execution boundary and failure path, not actual GitHub publication.
-- The authenticated host CLI read route works, but the original Task labels
-  could not run in the selected native runner, and its isolated HOME could not
-  read that login. The generated workflow uses the runner's supported finite
-  entries and passes explicitly reviewed host/config directory paths only to
-  the `gh` child. Token variables are removed; no token bytes enter Task input,
-  source, reports or logs. Live release-write scope and credential availability
-  in the selected managed process are still unverified.
-- No production release has been staged or published. A final source-bound
-  macOS package run, exact pushed tag, reviewed workflow trust and explicit
-  owner authorization for the target draft/publication are required before a
-  real write. No fixture result stands in for that readback.
-- Keep `.github/workflows/release.yml` enabled until the local operation,
-  explicit publication/readback contract, trigger/status disposition, and
-  required review are accepted. Preserve the separate product release policy.
+The Git-shared generator produces an immutable external workflow per selected
+source/tag/package and `stage` or `publish` operation. `check:fast` plans locally;
+reviewed `package` performs that exact network operation; `check` reads it back.
+The package must already have a passing clean-source native record, report and
+matching retained bytes. Full Git history supplies release notes. Local workflow
+trust and explicit release authorization remain required for every selected
+operation. The existing GitHub CLI Keychain route is passed only to the `gh`
+child; token bytes never enter source, workflow files, or reports.
 
-The existing package receipt in
-`/Users/briankeeley/sprig/audit-reports/px4xplane-cutover-99e4e82-2026-09-30/README.md`
-qualifies only its exact local macOS arm64 package candidate. It is not a
-release-publication receipt.
+[Exact qualification receipt](../docs/evidence/pipeline-release-acceptance-2026-10-02.json):
 
-## Draft readback and recovery
+- Original product source `9dbb408e7e062134c1a7ac2c4c43225e1efa903d`; passing
+  package run `1790808674908-28172` was reused without rebuilding.
+- Published helper `c70733d` recovered existing draft 401686395 through real
+  managed package/check runs `1790968848728-40253` / `1790968876821-41611`.
+- Owner-authorized managed publication/readback runs
+  `1790968926026-42745` / `1790968959991-44180` passed for development prerelease
+  `dev-20260930-225214`. An unauthenticated public download matched the original
+  164,807-byte asset and SHA-256 `8533d4c5ee3f57335c92dc3ea5ed984c50a75d15da14c1db86c03084303fa557`.
+- Deliberate managed read-only check `1790969027901-45258` rejected the old draft
+  expectation after publication. The earlier failed post-create readback remains
+  retained; its partial write was reconciled without a duplicate or overwrite.
+- Native runner source `5d97317`, binary hash `97253c8f7ed4387d4d2fac13d419b00b72446c8ef9a4776350d75812637ed0d2`,
+  Task 3.53.1 and Node 24.14.1 were selected explicitly. Source/helper/workflow,
+  package and archive identities are bound in the receipt.
 
-GitHub can return 404 from the release-by-tag endpoint for an unpublished draft.
-The local publisher resolves the exact tag through the authenticated release
-list and then reads the selected release ID. A retry of `stage` reuses only a
-draft whose tag, source, notes, prerelease flag and sole asset match the reviewed
-request. It never overwrites an existing release. A mismatched or published
-release fails closed; inspect it before choosing any separate corrective action.
+## Trigger, status and platform retirement
 
-The October 2 managed attempt created draft release `401686395` for
-`dev-20260930-225214` and uploaded the qualified 164,807-byte macOS asset, then
-failed in its old tag-based readback. Authenticated listing/readback verifies the
-actual draft and digest. [The retained evidence](../docs/evidence/pipeline-draft-readback-2026-10-02.json)
-separates that remote write, the failed native result, focused repair tests and
-remaining managed recovery. Do not retry the old publisher or treat the draft
-as publicly published. `release.yml` remains enabled.
+The owner-approved local contract retires automatic `v*.*.*` tag dispatch,
+GitHub manual Actions dispatch and the `Create GitHub Release`, three
+`Build <platform> for Release`, and `Release Summary` forge checks.
+Pushing a tag alone does not build or publish. Users invoke the reviewed local
+workflow and inspect Pipeline Runs, `status`/`log` and retained receipts as
+documented in [the operator runbook](README.md#explicit-local-release-workflow).
+No hosted check service or automatic event receiver replaces these triggers.
+
+Only macOS 26.4.1 arm64 is qualified. Windows/Linux/universal distribution remains
+owner-deferred; source/build support is preserved. The actual artifact is the
+verified macOS arm64 tar.gz, not the former three ZIP/universal promise.
+No stable release or X-Plane/HITL runtime acceptance is implied.
+
+`release.yml` had no concurrency group, automatic cancellation, cache,
+environment gate or artifact-retention period. Explicit local cancellation
+preserves terminal evidence; a cancellation or error after a remote write may
+leave a completed write, so inspect and reconcile the exact release before any
+retry. Draft recovery validates tag/source/notes/sole asset and refuses changed
+or already-published state. No rollback deletes or overwrites remote assets.
+Local receipts/packages are archived for at least 90 days; public assets retain
+normal GitHub release lifetime. Authenticated staging, public availability,
+negative-state rejection and recovery are now evidenced, so only
+`.github/workflows/release.yml` is removed for #29.

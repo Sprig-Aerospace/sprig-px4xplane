@@ -1,0 +1,398 @@
+{
+  "schemaVersion": 1,
+  "issue": "Sprig-Aerospace/sprig-px4xplane#29",
+  "qualification": "actual managed execution and GitHub publication; no fixture substituted",
+  "productSource": "9dbb408e7e062134c1a7ac2c4c43225e1efa903d",
+  "publisherSource": "c70733d17eafb814c8d4263e8989c56785f1faef",
+  "publisherSha256": "f03c93f1ae8efc5f00b33388a4405df9393f124623ab8b9a2e66f793eff9c1c0",
+  "runnerSource": "5d97317cbd6bfa003739daa356df738b53e289bd",
+  "runnerBinary": "/Users/briankeeley/sprig/.sprig-rollout-qualification/pipeline-main-5d97317-runner/pipeline",
+  "stateHome": "/Users/briankeeley/sprig/.sprig-rollout-qualification/px4xplane-release-9dbb408-state",
+  "nodeVersion": "24.14.1",
+  "taskVersion": "3.53.1",
+  "retainedBuild": {
+    "runId": "1790808674908-28172",
+    "recordFileSha256": "a6096db0b4f81fa0ba7cb8e6f15e785baedcc7f7c4f3c945d755ca904515e302",
+    "artifactBytes": 164807,
+    "artifactSha256": "8533d4c5ee3f57335c92dc3ea5ed984c50a75d15da14c1db86c03084303fa557",
+    "rebuilt": false
+  },
+  "ownerAuthorization": "2026-10-02: all trust approved; px4 authorized, applied to the previously prepared exact development-prerelease proposal. Windows/Linux/universal artifacts remain explicitly deferred; source support preserved.",
+  "managedRuns": [
+    {
+      "runId": "1790968848728-40253",
+      "task": "package",
+      "outcome": "passed",
+      "category": "passed",
+      "exitCode": 0,
+      "startedAtMs": 1790968848728,
+      "finishedAtMs": 1790968869273,
+      "elapsedSeconds": 20.526402416,
+      "recordSha256": "a8038e36a24f5ad323b593f097221edeeb820c6fa80d6d2c056bba26fbcad881",
+      "runnerSha256": "0ae7ed97e58b0b2f7038cee1080e8a4a9d78f3afd0aeace0b5bc8d133ccb0a25",
+      "workflowInputs": {
+        "Taskfile.yml": "e77839f0a5e2fed438c4ad3e7a61797c1fb6cf22a06d06486822273c5b05db12",
+        "environment.json": "5edb48bbeb84e0a1a65b2d9efca230c1f30d8e4cfcf5f3467f133ff73c6cda31",
+        "scripts/managed-release-workflow.mjs": "f03c93f1ae8efc5f00b33388a4405df9393f124623ab8b9a2e66f793eff9c1c0",
+        "scripts/request.json": "8c28676a4419558f03633d89131d8d1030b78567182187d99619065a025f20bb"
+      },
+      "toolIdentity": {
+        "clang": {
+          "path": "/usr/bin/clang",
+          "sha256": "12bed4523661307059b879b9b54e77a73176e9d27d27a0e40363271d8f0668ba"
+        },
+        "clang++": {
+          "path": "/usr/bin/clang++",
+          "sha256": "12bed4523661307059b879b9b54e77a73176e9d27d27a0e40363271d8f0668ba"
+        },
+        "cmake": {
+          "path": "/opt/homebrew/Cellar/cmake/4.3.3/bin/cmake",
+          "sha256": "21cc7838296a3b72bea03d332b3fe39d189807d641b16ef46975d0f9f688f769"
+        },
+        "ctest": {
+          "path": "/opt/homebrew/Cellar/cmake/4.3.3/bin/ctest",
+          "sha256": "7b685a17520214d277006d3264a14c2936191da215e53285abee651196f693e1"
+        },
+        "ninja": {
+          "path": "/opt/homebrew/Cellar/ninja/1.13.2/bin/ninja",
+          "sha256": "48761628046784f59bd789f5a72b88da99205c5849e5d19ae4d317854ae09e83"
+        },
+        "node": {
+          "path": "/Users/briankeeley/.nvm/versions/node/v24.14.1/bin/node",
+          "sha256": "35d4bc736bbe4161f0c074aa140ddb74586e46969bc2ad63d32c838bec4463ff"
+        },
+        "task": "0ae7ed97e58b0b2f7038cee1080e8a4a9d78f3afd0aeace0b5bc8d133ccb0a25"
+      },
+      "package": {
+        "bytes": 702,
+        "maximumBytes": 10485760,
+        "name": "release-receipt.tar.gz",
+        "sha256": "dacc75119749b7477bbb44461d0fe83d10228c53d7756c2c855d4058b7c456eb"
+      },
+      "reason": null,
+      "releaseEligible": true,
+      "source": {
+        "commit": "9dbb408e7e062134c1a7ac2c4c43225e1efa903d",
+        "clean": true,
+        "fingerprint": "c47623372874996e72a990469972ccd56e51fa2ed8b920153e7035bbcfe964e0",
+        "submodules": {
+          "lib/Eigen": "cf794d3b741a6278df169e58461f8529f43bce5d",
+          "lib/XYZgeomag": "a7d09fa06a0392421d2c353c7d106261bf0e2f76",
+          "lib/mavlink/c_library_v2": "a792c5208055337d69efff769a14847620355f83",
+          "lib/simpleini": "afb295b21b7bdb188059ff2a770036c10c813ee3"
+        },
+        "fileCount": 2320
+      },
+      "operation": "recovery",
+      "trustReview": "8547b4c08948d81c282c7f8ef5fb8cbf6260930128afb4e7b2a66a06eca06a8c",
+      "archive": "/Users/briankeeley/sprig/pipeline-artifact-archive/px4xplane-release/06d69c12f32b95df3c3a270e3933b181c35998da1fcecbd5eb88d86ea64af0e4/1790968848728-40253",
+      "archiveManifestSha256": "32889520a0099d217268a574d9bd2e5241a37b90483136ff7641a3d54d4490dd",
+      "receipt": "/Users/briankeeley/sprig/audit-reports/rollout-decisions-20261001/px4-recovery-managed-20261002.json"
+    },
+    {
+      "runId": "1790968876821-41611",
+      "task": "check",
+      "outcome": "passed",
+      "category": "passed",
+      "exitCode": 0,
+      "startedAtMs": 1790968876821,
+      "finishedAtMs": 1790968888114,
+      "elapsedSeconds": 11.274365625,
+      "recordSha256": "1336da71022cdfdc135ad9c2384be1a27ce796735b67304ace7f40f13a23a043",
+      "runnerSha256": "0ae7ed97e58b0b2f7038cee1080e8a4a9d78f3afd0aeace0b5bc8d133ccb0a25",
+      "workflowInputs": {
+        "Taskfile.yml": "e77839f0a5e2fed438c4ad3e7a61797c1fb6cf22a06d06486822273c5b05db12",
+        "environment.json": "5edb48bbeb84e0a1a65b2d9efca230c1f30d8e4cfcf5f3467f133ff73c6cda31",
+        "scripts/managed-release-workflow.mjs": "f03c93f1ae8efc5f00b33388a4405df9393f124623ab8b9a2e66f793eff9c1c0",
+        "scripts/request.json": "8c28676a4419558f03633d89131d8d1030b78567182187d99619065a025f20bb"
+      },
+      "toolIdentity": {
+        "clang": {
+          "path": "/usr/bin/clang",
+          "sha256": "12bed4523661307059b879b9b54e77a73176e9d27d27a0e40363271d8f0668ba"
+        },
+        "clang++": {
+          "path": "/usr/bin/clang++",
+          "sha256": "12bed4523661307059b879b9b54e77a73176e9d27d27a0e40363271d8f0668ba"
+        },
+        "cmake": {
+          "path": "/opt/homebrew/Cellar/cmake/4.3.3/bin/cmake",
+          "sha256": "21cc7838296a3b72bea03d332b3fe39d189807d641b16ef46975d0f9f688f769"
+        },
+        "ctest": {
+          "path": "/opt/homebrew/Cellar/cmake/4.3.3/bin/ctest",
+          "sha256": "7b685a17520214d277006d3264a14c2936191da215e53285abee651196f693e1"
+        },
+        "ninja": {
+          "path": "/opt/homebrew/Cellar/ninja/1.13.2/bin/ninja",
+          "sha256": "48761628046784f59bd789f5a72b88da99205c5849e5d19ae4d317854ae09e83"
+        },
+        "node": {
+          "path": "/Users/briankeeley/.nvm/versions/node/v24.14.1/bin/node",
+          "sha256": "35d4bc736bbe4161f0c074aa140ddb74586e46969bc2ad63d32c838bec4463ff"
+        },
+        "task": "0ae7ed97e58b0b2f7038cee1080e8a4a9d78f3afd0aeace0b5bc8d133ccb0a25"
+      },
+      "package": null,
+      "reason": null,
+      "releaseEligible": false,
+      "source": {
+        "commit": "9dbb408e7e062134c1a7ac2c4c43225e1efa903d",
+        "clean": true,
+        "fingerprint": "c47623372874996e72a990469972ccd56e51fa2ed8b920153e7035bbcfe964e0",
+        "submodules": {
+          "lib/Eigen": "cf794d3b741a6278df169e58461f8529f43bce5d",
+          "lib/XYZgeomag": "a7d09fa06a0392421d2c353c7d106261bf0e2f76",
+          "lib/mavlink/c_library_v2": "a792c5208055337d69efff769a14847620355f83",
+          "lib/simpleini": "afb295b21b7bdb188059ff2a770036c10c813ee3"
+        },
+        "fileCount": 2320
+      },
+      "operation": "recovery",
+      "trustReview": "8547b4c08948d81c282c7f8ef5fb8cbf6260930128afb4e7b2a66a06eca06a8c",
+      "archive": "/Users/briankeeley/sprig/pipeline-artifact-archive/px4xplane-release/06d69c12f32b95df3c3a270e3933b181c35998da1fcecbd5eb88d86ea64af0e4/1790968876821-41611",
+      "archiveManifestSha256": "7af24fd2925316fc153f099f4957d0c964b9d21bab277dd51ab1a3e1e5026f5e",
+      "receipt": "/Users/briankeeley/sprig/audit-reports/rollout-decisions-20261001/px4-recovery-managed-20261002.json"
+    },
+    {
+      "runId": "1790968926026-42745",
+      "task": "package",
+      "outcome": "passed",
+      "category": "passed",
+      "exitCode": 0,
+      "startedAtMs": 1790968926026,
+      "finishedAtMs": 1790968952480,
+      "elapsedSeconds": 26.435356916,
+      "recordSha256": "be6ef4be055574412058c016194ace63b735241fbb89f1cbb46fb61d69e7b081",
+      "runnerSha256": "0ae7ed97e58b0b2f7038cee1080e8a4a9d78f3afd0aeace0b5bc8d133ccb0a25",
+      "workflowInputs": {
+        "Taskfile.yml": "e77839f0a5e2fed438c4ad3e7a61797c1fb6cf22a06d06486822273c5b05db12",
+        "environment.json": "5edb48bbeb84e0a1a65b2d9efca230c1f30d8e4cfcf5f3467f133ff73c6cda31",
+        "scripts/managed-release-workflow.mjs": "f03c93f1ae8efc5f00b33388a4405df9393f124623ab8b9a2e66f793eff9c1c0",
+        "scripts/request.json": "060ed4203bdf6f862f19a9085301b9fb25c85ec0d2dadadb0d987f9468d16abb"
+      },
+      "toolIdentity": {
+        "clang": {
+          "path": "/usr/bin/clang",
+          "sha256": "12bed4523661307059b879b9b54e77a73176e9d27d27a0e40363271d8f0668ba"
+        },
+        "clang++": {
+          "path": "/usr/bin/clang++",
+          "sha256": "12bed4523661307059b879b9b54e77a73176e9d27d27a0e40363271d8f0668ba"
+        },
+        "cmake": {
+          "path": "/opt/homebrew/Cellar/cmake/4.3.3/bin/cmake",
+          "sha256": "21cc7838296a3b72bea03d332b3fe39d189807d641b16ef46975d0f9f688f769"
+        },
+        "ctest": {
+          "path": "/opt/homebrew/Cellar/cmake/4.3.3/bin/ctest",
+          "sha256": "7b685a17520214d277006d3264a14c2936191da215e53285abee651196f693e1"
+        },
+        "ninja": {
+          "path": "/opt/homebrew/Cellar/ninja/1.13.2/bin/ninja",
+          "sha256": "48761628046784f59bd789f5a72b88da99205c5849e5d19ae4d317854ae09e83"
+        },
+        "node": {
+          "path": "/Users/briankeeley/.nvm/versions/node/v24.14.1/bin/node",
+          "sha256": "35d4bc736bbe4161f0c074aa140ddb74586e46969bc2ad63d32c838bec4463ff"
+        },
+        "task": "0ae7ed97e58b0b2f7038cee1080e8a4a9d78f3afd0aeace0b5bc8d133ccb0a25"
+      },
+      "package": {
+        "bytes": 690,
+        "maximumBytes": 10485760,
+        "name": "release-receipt.tar.gz",
+        "sha256": "aca07b13b77b022bc1cf9795e7c39d88046ba0290c4d275f47d67425f37a1eab"
+      },
+      "reason": null,
+      "releaseEligible": true,
+      "source": {
+        "commit": "9dbb408e7e062134c1a7ac2c4c43225e1efa903d",
+        "clean": true,
+        "fingerprint": "61f09afaf1c680572b889445bbaf96bcffa98c7bdf6e69267f2c5aa8a7f39a87",
+        "submodules": {
+          "lib/Eigen": "cf794d3b741a6278df169e58461f8529f43bce5d",
+          "lib/XYZgeomag": "a7d09fa06a0392421d2c353c7d106261bf0e2f76",
+          "lib/mavlink/c_library_v2": "a792c5208055337d69efff769a14847620355f83",
+          "lib/simpleini": "afb295b21b7bdb188059ff2a770036c10c813ee3"
+        },
+        "fileCount": 2320
+      },
+      "operation": "publish",
+      "trustReview": "909214049ed970c5747db93a8e51b2c4a059c62eb4c3a2a7f28e67c1e554da5f",
+      "archive": "/Users/briankeeley/sprig/pipeline-artifact-archive/px4xplane-release/06d69c12f32b95df3c3a270e3933b181c35998da1fcecbd5eb88d86ea64af0e4/1790968926026-42745",
+      "archiveManifestSha256": "06aa1adc4f7a3104671165143b7994227336b12c7eada5c54a77ecd4eb2b12a9",
+      "receipt": "/Users/briankeeley/sprig/audit-reports/rollout-decisions-20261001/px4-publish-managed-20261002.json"
+    },
+    {
+      "runId": "1790968959991-44180",
+      "task": "check",
+      "outcome": "passed",
+      "category": "passed",
+      "exitCode": 0,
+      "startedAtMs": 1790968959991,
+      "finishedAtMs": 1790968971869,
+      "elapsedSeconds": 11.859003292,
+      "recordSha256": "90c8e681c8fb0fe14e1f8c529ee9741a40276b78526711132127112ef6885148",
+      "runnerSha256": "0ae7ed97e58b0b2f7038cee1080e8a4a9d78f3afd0aeace0b5bc8d133ccb0a25",
+      "workflowInputs": {
+        "Taskfile.yml": "e77839f0a5e2fed438c4ad3e7a61797c1fb6cf22a06d06486822273c5b05db12",
+        "environment.json": "5edb48bbeb84e0a1a65b2d9efca230c1f30d8e4cfcf5f3467f133ff73c6cda31",
+        "scripts/managed-release-workflow.mjs": "f03c93f1ae8efc5f00b33388a4405df9393f124623ab8b9a2e66f793eff9c1c0",
+        "scripts/request.json": "060ed4203bdf6f862f19a9085301b9fb25c85ec0d2dadadb0d987f9468d16abb"
+      },
+      "toolIdentity": {
+        "clang": {
+          "path": "/usr/bin/clang",
+          "sha256": "12bed4523661307059b879b9b54e77a73176e9d27d27a0e40363271d8f0668ba"
+        },
+        "clang++": {
+          "path": "/usr/bin/clang++",
+          "sha256": "12bed4523661307059b879b9b54e77a73176e9d27d27a0e40363271d8f0668ba"
+        },
+        "cmake": {
+          "path": "/opt/homebrew/Cellar/cmake/4.3.3/bin/cmake",
+          "sha256": "21cc7838296a3b72bea03d332b3fe39d189807d641b16ef46975d0f9f688f769"
+        },
+        "ctest": {
+          "path": "/opt/homebrew/Cellar/cmake/4.3.3/bin/ctest",
+          "sha256": "7b685a17520214d277006d3264a14c2936191da215e53285abee651196f693e1"
+        },
+        "ninja": {
+          "path": "/opt/homebrew/Cellar/ninja/1.13.2/bin/ninja",
+          "sha256": "48761628046784f59bd789f5a72b88da99205c5849e5d19ae4d317854ae09e83"
+        },
+        "node": {
+          "path": "/Users/briankeeley/.nvm/versions/node/v24.14.1/bin/node",
+          "sha256": "35d4bc736bbe4161f0c074aa140ddb74586e46969bc2ad63d32c838bec4463ff"
+        },
+        "task": "0ae7ed97e58b0b2f7038cee1080e8a4a9d78f3afd0aeace0b5bc8d133ccb0a25"
+      },
+      "package": null,
+      "reason": null,
+      "releaseEligible": false,
+      "source": {
+        "commit": "9dbb408e7e062134c1a7ac2c4c43225e1efa903d",
+        "clean": true,
+        "fingerprint": "61f09afaf1c680572b889445bbaf96bcffa98c7bdf6e69267f2c5aa8a7f39a87",
+        "submodules": {
+          "lib/Eigen": "cf794d3b741a6278df169e58461f8529f43bce5d",
+          "lib/XYZgeomag": "a7d09fa06a0392421d2c353c7d106261bf0e2f76",
+          "lib/mavlink/c_library_v2": "a792c5208055337d69efff769a14847620355f83",
+          "lib/simpleini": "afb295b21b7bdb188059ff2a770036c10c813ee3"
+        },
+        "fileCount": 2320
+      },
+      "operation": "publish",
+      "trustReview": "909214049ed970c5747db93a8e51b2c4a059c62eb4c3a2a7f28e67c1e554da5f",
+      "archive": "/Users/briankeeley/sprig/pipeline-artifact-archive/px4xplane-release/06d69c12f32b95df3c3a270e3933b181c35998da1fcecbd5eb88d86ea64af0e4/1790968959991-44180",
+      "archiveManifestSha256": "d5a263fe51ddc1aa76f6082356a3508e763b27e7c26263e71057dc3ea343e2dc",
+      "receipt": "/Users/briankeeley/sprig/audit-reports/rollout-decisions-20261001/px4-publish-managed-20261002.json"
+    },
+    {
+      "runId": "1790969027901-45258",
+      "task": "check",
+      "outcome": "failed",
+      "category": "failed-checks",
+      "exitCode": 201,
+      "startedAtMs": 1790969027901,
+      "finishedAtMs": 1790969039703,
+      "elapsedSeconds": 11.783116917,
+      "recordSha256": "f94700622b6ad52e4ca1af9f7e752ec0e8a3fed982d87410f4c14c870b2af119",
+      "runnerSha256": "0ae7ed97e58b0b2f7038cee1080e8a4a9d78f3afd0aeace0b5bc8d133ccb0a25",
+      "workflowInputs": {
+        "Taskfile.yml": "e77839f0a5e2fed438c4ad3e7a61797c1fb6cf22a06d06486822273c5b05db12",
+        "environment.json": "5edb48bbeb84e0a1a65b2d9efca230c1f30d8e4cfcf5f3467f133ff73c6cda31",
+        "scripts/managed-release-workflow.mjs": "f03c93f1ae8efc5f00b33388a4405df9393f124623ab8b9a2e66f793eff9c1c0",
+        "scripts/request.json": "8c28676a4419558f03633d89131d8d1030b78567182187d99619065a025f20bb"
+      },
+      "toolIdentity": {
+        "clang": {
+          "path": "/usr/bin/clang",
+          "sha256": "12bed4523661307059b879b9b54e77a73176e9d27d27a0e40363271d8f0668ba"
+        },
+        "clang++": {
+          "path": "/usr/bin/clang++",
+          "sha256": "12bed4523661307059b879b9b54e77a73176e9d27d27a0e40363271d8f0668ba"
+        },
+        "cmake": {
+          "path": "/opt/homebrew/Cellar/cmake/4.3.3/bin/cmake",
+          "sha256": "21cc7838296a3b72bea03d332b3fe39d189807d641b16ef46975d0f9f688f769"
+        },
+        "ctest": {
+          "path": "/opt/homebrew/Cellar/cmake/4.3.3/bin/ctest",
+          "sha256": "7b685a17520214d277006d3264a14c2936191da215e53285abee651196f693e1"
+        },
+        "ninja": {
+          "path": "/opt/homebrew/Cellar/ninja/1.13.2/bin/ninja",
+          "sha256": "48761628046784f59bd789f5a72b88da99205c5849e5d19ae4d317854ae09e83"
+        },
+        "node": {
+          "path": "/Users/briankeeley/.nvm/versions/node/v24.14.1/bin/node",
+          "sha256": "35d4bc736bbe4161f0c074aa140ddb74586e46969bc2ad63d32c838bec4463ff"
+        },
+        "task": "0ae7ed97e58b0b2f7038cee1080e8a4a9d78f3afd0aeace0b5bc8d133ccb0a25"
+      },
+      "package": null,
+      "reason": null,
+      "releaseEligible": false,
+      "source": {
+        "commit": "9dbb408e7e062134c1a7ac2c4c43225e1efa903d",
+        "clean": true,
+        "fingerprint": "c47623372874996e72a990469972ccd56e51fa2ed8b920153e7035bbcfe964e0",
+        "submodules": {
+          "lib/Eigen": "cf794d3b741a6278df169e58461f8529f43bce5d",
+          "lib/XYZgeomag": "a7d09fa06a0392421d2c353c7d106261bf0e2f76",
+          "lib/mavlink/c_library_v2": "a792c5208055337d69efff769a14847620355f83",
+          "lib/simpleini": "afb295b21b7bdb188059ff2a770036c10c813ee3"
+        },
+        "fileCount": 2320
+      },
+      "operation": "reject-published-draft",
+      "trustReview": "8547b4c08948d81c282c7f8ef5fb8cbf6260930128afb4e7b2a66a06eca06a8c",
+      "archive": "/Users/briankeeley/sprig/pipeline-artifact-archive/px4xplane-release/06d69c12f32b95df3c3a270e3933b181c35998da1fcecbd5eb88d86ea64af0e4/1790969027901-45258",
+      "archiveManifestSha256": "83f020d30cba9f091652142ea13179e7c477091cd2a1f16b546828154a6f400f",
+      "receipt": "/Users/briankeeley/sprig/audit-reports/rollout-decisions-20261001/px4-reject-published-draft-managed-20261002.json"
+    }
+  ],
+  "publicReadback": {
+    "observedAt": "2026-10-02T19:23:14.429647+00:00",
+    "releaseId": 401686395,
+    "tag": "dev-20260930-225214",
+    "url": "https://github.com/Sprig-Aerospace/sprig-px4xplane/releases/tag/dev-20260930-225214",
+    "draft": false,
+    "prerelease": true,
+    "publishedAt": "2026-10-02T19:22:23Z",
+    "assetId": 605259649,
+    "downloadUrl": "https://github.com/Sprig-Aerospace/sprig-px4xplane/releases/download/dev-20260930-225214/px4xplane-ci-mac.tar.gz",
+    "downloadAuthentication": "none; curl without Authorization header or GitHub CLI credential",
+    "bytes": 164807,
+    "sha256": "8533d4c5ee3f57335c92dc3ea5ed984c50a75d15da14c1db86c03084303fa557",
+    "localCopy": "/Users/briankeeley/sprig/audit-reports/rollout-decisions-20261001/px4-public-605259649-downloaded.tar.gz",
+    "notesSha256": "b7d3ddb6e0ea1906bbfd0242a2bf67424776b5fc88e2a5da5a7b752129fd9257"
+  },
+  "negativeCase": "After publication, the original approved stage workflow check rejected the actual published state (draft=false). Read-only execution, no release/asset mutation. Original failed creation/readback run1790933338006-84599 remains retained.",
+  "retirement": {
+    "file": ".github/workflows/release.yml",
+    "triggers": [
+      "push tags v*.*.*",
+      "workflow_dispatch"
+    ],
+    "statuses": [
+      "Create GitHub Release",
+      "Build windows for Release",
+      "Build linux for Release",
+      "Build macos for Release",
+      "Release Summary"
+    ],
+    "replacement": "Explicit local build, separately reviewed stage/publish workflow, retained managed receipts and remote byte readback; no automatic GitHub trigger/status enforcement.",
+    "platforms": "macOS26.4.1arm64 only; Windows/Linux/universal distribution deferred by owner, not reported as passing.",
+    "cancellation": "Local cancellation preserves terminal records; interrupted remote writes require readback/reconciliation. No automatic supersession was declared by release.yml.",
+    "retention": "GitHub release assets retain ordinary release lifetime; verified local receipts archived for at least90days. No retention timer was declared by release.yml."
+  },
+  "limits": [
+    "Development prerelease only; no stable/latest release authorization or live HITL claim.",
+    "Product build reused only for original immutable source9dbb408; publisher helper separately qualified atc70733d.",
+    "Deleting Actions and editing docs/evidence changes no executed product or publisher bytes."
+  ]
+}

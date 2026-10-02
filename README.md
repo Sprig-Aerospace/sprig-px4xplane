@@ -51,11 +51,11 @@ This project establishes a robust connection between X-Plane and PX4 SITL (Softw
 
 #### 🤖 Development & CI/CD
 
-- **🤖 Automated CI/CD System**: GitHub Actions workflows for cross-platform builds:
-  - Automatic builds for pull requests targeting master (Windows, Linux, macOS in parallel)
-  - Automated releases with pre-built binaries via version tags
-  - 90-day artifact retention for testing builds
-  - Real-time build status badges on README
+- **Local Pipeline CI/CD**:
+  - Explicitly invoked checks and packages on the qualified macOS arm64 profile
+  - Reviewed staging and publication of a selected passing package
+  - At least 90-day local artifact/receipt retention
+  - Inspectable local run results; automatic GitHub triggers and checks retired
 
 - **📁 Plugin Structure Reorganization** (X-Plane SDK Standards):
   - **config.ini moved to 64/ folder** (WITH the binary, not parent folder)
@@ -263,14 +263,16 @@ Don't want to build from source? **Download pre-built binaries** from the [Relea
 - 🐧 **Linux** (x64)
 - 🍎 **macOS** (Universal: Intel + Apple Silicon)
 
-All platforms are automatically built and tested via GitHub Actions CI/CD on every release.
+The links above describe upstream binaries. This Sprig fork uses explicitly invoked
+[local Pipeline workflows](pipeline/README.md). Its qualified distribution is macOS
+arm64; Windows/Linux/universal distribution is deferred while source support remains.
 
 ### Development Workflow
 
 **For Contributors:**
 - Work on `master` branch for regular development
-- Open a pull request targeting `master` to trigger builds (artifacts kept 90 days); the build workflow also supports manual dispatch
-- Create version tag (`v3.1.0`) to trigger automatic release with binaries
+- Run the reviewed local Pipeline checks/package and retain results for at least 90 days
+- Select a tagged passing package, then explicitly stage and publish through the reviewed local release workflow; tags alone do not publish
 
 📖 **For complete developer workflow, versioning, and CI/CD**, see **[Developer Guide](docs/DEVELOPER.md)**.
 
